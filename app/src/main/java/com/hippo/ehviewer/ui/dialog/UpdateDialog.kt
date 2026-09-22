@@ -29,11 +29,11 @@ import kotlin.properties.Delegates
 
 class UpdateDialog(private val activity: Activity) {
     companion object {
-        const val GITHUB_RELEASE_URL = "https://github.com/Nazh1123/Ehviewer_CN_SXJ/releases"
+        const val GITHUB_RELEASE_URL = "https://github.com/einpc/EhviewerNz/releases"
         const val GITHUB_README_URL =
-            "https://github.com/Nazh1123/EhviewerNz/blob/BiLi_PC_Gamer/README.md"
+            "https://github.com/einpc/EhviewerNz/blob/BiLi_PC_Gamer/README.md"
         const val GITHUB_SUPPORT_URL =
-            "https://github.com/Nazh1123/EhviewerNz/blob/BiLi_PC_Gamer/feedauthor/support.md"
+            "https://github.com/einpc/EhviewerNz/blob/BiLi_PC_Gamer/feedauthor/support.md"
         const val INSTALL_PERMISSION_CODE = 1002
 
         // TODO more lock for different language

@@ -24,7 +24,7 @@ class AppUpdater private constructor() {
 
     companion object {
         private const val GITHUB_LATEST_RELEASE_API =
-            "https://api.github.com/repos/Nazh1123/Ehviewer_CN_SXJ/releases/latest"
+            "https://api.github.com/repos/einpc/EhviewerNz/releases/latest"
 
         const val VERSION: String = "version"
         const val VERSION_CODE: String = "versionCode"
