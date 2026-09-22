@@ -95,6 +95,7 @@ import com.hippo.ehviewer.client.GalleryTitleKeywordExtractor;
 import com.hippo.ehviewer.client.data.GalleryComment;
 import com.hippo.ehviewer.client.data.GalleryCommentList;
 import com.hippo.ehviewer.client.data.GalleryDetail;
+import com.hippo.ehviewer.client.data.GalleryDetailMetadata;
 import com.hippo.ehviewer.client.data.GalleryInfo;
 import com.hippo.ehviewer.client.data.GalleryTagGroup;
 import com.hippo.ehviewer.client.data.ListUrlBuilder;
@@ -147,6 +148,7 @@ import com.hippo.unifile.UniFile;
 import com.hippo.util.AppHelper;
 import com.hippo.util.DrawableManager;
 import com.hippo.util.ExceptionUtils;
+import com.hippo.util.IoThreadPoolExecutor;
 import com.hippo.util.ReadableTime;
 import com.hippo.view.ViewTransition;
 import com.hippo.widget.AutoWrapLayout;
@@ -210,6 +212,8 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
     private static final String KEY_REQUEST_ID = "request_id";
     private static final String KEY_GALLERY_UPDATE_SESSION_GID = "gallery_update_session_gid";
     private static final String KEY_GALLERY_UPDATE_BUTTON_STATE = "gallery_update_button_state";
+    private static final String KEY_LOCAL_METADATA_MODE = "local_metadata_mode";
+    private static final String KEY_LOCAL_METADATA_SAVED_AT = "local_metadata_saved_at";
 
     private static final int GALLERY_UPDATE_BUTTON_AVAILABLE = 0;
     private static final int GALLERY_UPDATE_BUTTON_UPDATING = 1;
@@ -358,6 +362,12 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
     private long mGalleryUpdateSessionGid = -1L;
     private int mGalleryUpdateButtonState = GALLERY_UPDATE_BUTTON_AVAILABLE;
     private int mRequestId = IntIdGenerator.INVALID_ID;
+
+    /** True while the detail page shows metadata restored from the download folder. */
+    private boolean mLocalMetadataMode;
+    private long mLocalMetadataSavedAt;
+    @Nullable
+    private TextView mLocalMetadataNotice;
 
     @Nullable
     private TorrentDownloadController torrentDownloadController;
@@ -549,6 +559,8 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
                 KEY_GALLERY_UPDATE_SESSION_GID, -1L);
         mGalleryUpdateButtonState = savedInstanceState.getInt(
                 KEY_GALLERY_UPDATE_BUTTON_STATE, GALLERY_UPDATE_BUTTON_AVAILABLE);
+        mLocalMetadataMode = savedInstanceState.getBoolean(KEY_LOCAL_METADATA_MODE, false);
+        mLocalMetadataSavedAt = savedInstanceState.getLong(KEY_LOCAL_METADATA_SAVED_AT);
     }
 
     @Override
@@ -569,6 +581,8 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
             outState.putParcelable(KEY_GALLERY_DETAIL, mGalleryDetail);
         }
         outState.putInt(KEY_REQUEST_ID, mRequestId);
+        outState.putBoolean(KEY_LOCAL_METADATA_MODE, mLocalMetadataMode);
+        outState.putLong(KEY_LOCAL_METADATA_SAVED_AT, mLocalMetadataSavedAt);
         if (mGalleryUpdateSessionGid > 0L) {
             outState.putLong(KEY_GALLERY_UPDATE_SESSION_GID, mGalleryUpdateSessionGid);
             outState.putInt(KEY_GALLERY_UPDATE_BUTTON_STATE, mGalleryUpdateButtonState);
@@ -787,6 +801,8 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
         mTags = (LinearLayout) ViewUtils.$$(belowHeader, R.id.tags);
         mNoTags = (TextView) ViewUtils.$$(mTags, R.id.no_tags);
 
+        mLocalMetadataNotice = (TextView) ViewUtils.$$(belowHeader, R.id.local_metadata_notice);
+
         mComments = (LinearLayout) ViewUtils.$$(belowHeader, R.id.comments);
         mCommentsText = (TextView) ViewUtils.$$(mComments, R.id.comments_text);
         if (!Settings.getShowGalleryComment()) {
@@ -817,6 +833,13 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
                 bindViewSecond();
                 setTransitionName();
                 adjustViewVisibility(STATE_NORMAL, false);
+                if (mLocalMetadataMode) {
+                    // The detail was restored from the download folder, hide the online actions
+                    showLocalMetadataNotice(mLocalMetadataSavedAt);
+                    applyLocalMetadataMode(true);
+                    // The online detail still has priority, try it without hiding the local one
+                    request();
+                }
             } else if (mGalleryInfo != null) {
                 bindViewFirst();
                 setTransitionName();
@@ -912,6 +935,7 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
         }
         mBelowHeader = null;
         mArchiverDownloadProgress = null;
+        mLocalMetadataNotice = null;
 
         mInfo = null;
         mLanguage = null;
@@ -1244,9 +1268,11 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
         }
 
         updateFavoriteDrawable();
-        bindArchiverProgress(gd);
+        if (!mLocalMetadataMode) {
+            bindArchiverProgress(gd);
+        }
         bindTags(gd.tags);
-        bindComments(gd.comments.comments);
+        bindComments(gd.comments != null ? gd.comments.comments : null);
         bindPreviews(gd);
     }
 
@@ -2825,17 +2851,133 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
                 EhDB.putDownloadInfo(mDownloadInfo);
             }
         }
+        mLocalMetadataMode = false;
         adjustViewVisibility(STATE_NORMAL, true);
         bindViewSecond();
+        applyLocalMetadataMode(false);
+        saveLocalMetadata(result);
     }
 
     protected void onGetGalleryDetailFailure(Exception e) {
         e.printStackTrace();
+        if (mLocalMetadataMode && mGalleryDetail != null) {
+            // Keep the metadata restored from the download folder on screen
+            adjustViewVisibility(STATE_NORMAL, true);
+            return;
+        }
         Context context = getEHContext();
         if (null != context && null != mTip) {
             String error = ExceptionUtils.getReadableString(e);
             mTip.setText(error);
             adjustViewVisibility(STATE_FAILED, true);
+        }
+        restoreLocalMetadata();
+    }
+
+    /**
+     * Refreshes the metadata stored in the download folder. The online detail is the source of
+     * truth, so the local copy is only rewritten when it differs from the online one.
+     */
+    private void saveLocalMetadata(@NonNull GalleryDetail detail) {
+        Context context = getEHContext();
+        if (context == null || detail.gid <= 0L
+                || EhApplication.getDownloadManager(context).getDownloadInfo(detail.gid) == null) {
+            return;
+        }
+        // Resolving the download folder and writing the file must not run on the main thread
+        IoThreadPoolExecutor.Companion.getInstance().execute(() ->
+                GalleryDetailMetadata.writeIfChanged(
+                        detail, SpiderDen.getExistingGalleryDownloadDir(detail)));
+    }
+
+    /**
+     * Tries to show the detail page from the metadata saved in the download folder when the online
+     * gallery is unavailable. Keeps the failure view when there is no usable metadata.
+     */
+    private void restoreLocalMetadata() {
+        if (mLocalMetadataMode) {
+            return;
+        }
+        GalleryInfo lookup = getGalleryInfo();
+        if (lookup == null) {
+            if (mGid <= 0L || mToken == null) {
+                return;
+            }
+            lookup = new GalleryInfo();
+            lookup.gid = mGid;
+            lookup.token = mToken;
+        }
+        final GalleryInfo info = lookup;
+        IoThreadPoolExecutor.Companion.getInstance().execute(() -> {
+            final GalleryDetailMetadata.Result result = GalleryDetailMetadata.read(info);
+            if (result == null) {
+                return;
+            }
+            handler.post(() -> {
+                if (isAdded() && mTip != null && mGalleryDetail == null) {
+                    applyLocalMetadata(result);
+                }
+            });
+        });
+    }
+
+    private void applyLocalMetadata(@NonNull GalleryDetailMetadata.Result result) {
+        mLocalMetadataMode = true;
+        mLocalMetadataSavedAt = result.savedAt;
+        mGalleryDetail = result.detail;
+        adjustViewVisibility(STATE_NORMAL, true);
+        bindViewSecond();
+        showLocalMetadataNotice(result.savedAt);
+        applyLocalMetadataMode(true);
+    }
+
+    private void showLocalMetadataNotice(long savedAt) {
+        if (mLocalMetadataNotice == null) {
+            return;
+        }
+        Resources resources = getResources2();
+        @SuppressLint("SimpleDateFormat") DateFormat dateFormat =
+                new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        String time = dateFormat.format(new Date(savedAt));
+        mLocalMetadataNotice.setText(resources != null
+                ? resources.getString(R.string.local_metadata_notice, time)
+                : time);
+    }
+
+    /**
+     * Shows or hides everything that needs the online gallery. Called with false once the online
+     * gallery is available again.
+     */
+    private void applyLocalMetadataMode(boolean local) {
+        int visibility = local ? View.GONE : View.VISIBLE;
+        setViewVisibility(visibility, mRate, mHeartGroup, mTorrent, mHaH, mArchiver, mArtist,
+                mSimilar, mSearchCover, mUploader, mCategory, mPreviews);
+        if (mLocalMetadataNotice != null) {
+            mLocalMetadataNotice.setVisibility(visibility);
+        }
+        if (mSwipePreviewIndicator != null) {
+            mSwipePreviewIndicator.setVisibility(View.GONE);
+        }
+        if (mComments != null) {
+            mComments.setVisibility(local || !Settings.getShowGalleryComment()
+                    ? View.GONE : View.VISIBLE);
+        }
+        if (mDetailScrollView != null) {
+            mDetailScrollView.setSwipeActivationView(local ? null : mPreviewText);
+        }
+        if (local) {
+            setGalleryVersionActionVisibility(false, false);
+            setViewVisibility(View.GONE, mHaveNewVersion);
+        } else {
+            updateGalleryVersionActionsVisibility();
+        }
+    }
+
+    private static void setViewVisibility(int visibility, @Nullable View... views) {
+        for (View view : views) {
+            if (view != null) {
+                view.setVisibility(visibility);
+            }
         }
     }
 

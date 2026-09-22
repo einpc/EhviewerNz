@@ -101,6 +101,7 @@ import com.hippo.ehviewer.download.DownloadManager;
 import com.hippo.ehviewer.download.DownloadQuickOrganizer;
 import com.hippo.ehviewer.download.DownloadLabelSearchQueryResolver;
 import com.hippo.ehviewer.download.DownloadService;
+import com.hippo.ehviewer.download.GalleryDetailMetadataBatchTask;
 import com.hippo.ehviewer.event.SomethingNeedRefresh;
 import com.hippo.ehviewer.gallery.A7ZipArchive;
 import com.hippo.ehviewer.gallery.ImportedGalleryProgress;
@@ -186,6 +187,8 @@ public class DownloadsScene extends ToolbarScene
          ---------------*/
     @Nullable
     private DownloadManager mDownloadManager;
+    @Nullable
+    private AlertDialog mMetadataProgressDialog;
     @Nullable
     public String mLabel;
     @Nullable
@@ -944,6 +947,7 @@ public class DownloadsScene extends ToolbarScene
         mPaginationIndicator = null;
         myPageChangeListener = null;
         needInitPage = false;
+        dismissMetadataProgressDialog();
         EventBus.getDefault().unregister(this);
     }
 
@@ -998,6 +1002,28 @@ public class DownloadsScene extends ToolbarScene
                                 mDownloadManager.resetAllReadingProgress();
                             }
                         }).show();
+                return true;
+            }
+            case R.id.action_update_local_metadata: {
+                Context context = getEHContext();
+                if (context == null) {
+                    return false;
+                }
+                if (searching) {
+                    Toast.makeText(context, R.string.download_searching, Toast.LENGTH_LONG).show();
+                    return true;
+                }
+                if (GalleryDetailMetadataBatchTask.isRunning()) {
+                    Toast.makeText(context, R.string.download_update_local_metadata_running,
+                            Toast.LENGTH_LONG).show();
+                    return true;
+                }
+                new AlertDialog.Builder(context)
+                        .setMessage(R.string.download_update_local_metadata_message)
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .setPositiveButton(android.R.string.ok,
+                                (dialog, which) -> startLocalMetadataUpdate(context))
+                        .show();
                 return true;
             }
             case R.id.search_download_gallery: {
@@ -2368,6 +2394,45 @@ public class DownloadsScene extends ToolbarScene
                 }
 
             }
+        }
+    }
+
+    /**
+     * Fetches and stores the metadata of every gallery in the download list, in list order, so the
+     * detail page still works after the online gallery has been removed.
+     */
+    private void startLocalMetadataUpdate(@NonNull Context context) {
+        GalleryDetailMetadataBatchTask.Listener listener =
+                new GalleryDetailMetadataBatchTask.Listener() {
+                    @Override
+                    public void onProgress(int current, int total) {
+                        if (mMetadataProgressDialog != null) {
+                            mMetadataProgressDialog.setMessage(getString(
+                                    R.string.download_update_local_metadata_progress,
+                                    current, total));
+                        }
+                    }
+
+                    @Override
+                    public void onFinished(int updated, int skipped) {
+                        dismissMetadataProgressDialog();
+                    }
+                };
+        GalleryDetailMetadataBatchTask task = new GalleryDetailMetadataBatchTask(context, listener);
+        mMetadataProgressDialog = new AlertDialog.Builder(context)
+                .setTitle(R.string.download_update_local_metadata)
+                .setMessage(getString(R.string.download_update_local_metadata_progress,
+                        0, task.getTotal()))
+                .setNegativeButton(android.R.string.cancel, (dialog, which) -> task.cancel(false))
+                .setCancelable(false)
+                .show();
+        task.execute();
+    }
+
+    private void dismissMetadataProgressDialog() {
+        if (mMetadataProgressDialog != null) {
+            mMetadataProgressDialog.dismiss();
+            mMetadataProgressDialog = null;
         }
     }
 

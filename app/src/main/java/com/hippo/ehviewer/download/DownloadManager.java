@@ -1678,6 +1678,8 @@ public class DownloadManager implements SpiderQueen.OnSpiderListener {
                     EhDB.putDownloadInfo(info);
                     if (info.state == DownloadInfo.STATE_FINISH) {
                         completeGalleryUpdate(info.gid);
+                        // Refresh the metadata stored in the download folder for offline detail pages
+                        new GalleryDetailMetadataTask(mContext, info).start();
                     } else if (GalleryUpdateManager.getPlan(info.gid) != null) {
                         // Failed updates keep their parent and plan. Metadata collected during this
                         // pass may now be sufficient to migrate progress; retry on every continuation.

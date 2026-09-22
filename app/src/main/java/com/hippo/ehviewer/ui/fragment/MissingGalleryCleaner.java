@@ -12,6 +12,7 @@ import com.hippo.ehviewer.EhApplication;
 import com.hippo.ehviewer.EhDB;
 import com.hippo.ehviewer.R;
 import com.hippo.ehviewer.Settings;
+import com.hippo.ehviewer.client.data.GalleryDetailMetadata;
 import com.hippo.ehviewer.dao.DownloadInfo;
 import com.hippo.ehviewer.download.DownloadManager;
 import com.hippo.ehviewer.gallery.LocalFolderGallerySource;
@@ -159,7 +160,8 @@ final class MissingGalleryCleaner {
         for (UniFile file : files) {
             String name = file.getName();
             if (DownloadManager.DOWNLOAD_INFO_FILENAME.equals(name)
-                    || ".nomedia".equals(name)) {
+                    || ".nomedia".equals(name)
+                    || GalleryDetailMetadata.FILE_NAME.equals(name)) {
                 continue;
             }
             return false;

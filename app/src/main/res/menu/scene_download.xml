@@ -182,6 +182,11 @@
       app:showAsAction="never"/>
 
     <item
+      android:id="@+id/action_update_local_metadata"
+      android:title="@string/download_update_local_metadata"
+      app:showAsAction="never"/>
+
+    <item
       android:id="@+id/search_download_gallery"
       android:title="@string/download_search_gallery"
       app:showAsAction="never"/>

@@ -37,6 +37,19 @@
             android:showDividers="middle"
             android:dividerPadding="@dimen/keyline_margin">
 
+            <TextView
+                android:id="@+id/local_metadata_notice"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingStart="@dimen/keyline_margin"
+                android:paddingTop="12dp"
+                android:paddingEnd="@dimen/keyline_margin"
+                android:paddingBottom="12dp"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="14sp"
+                android:visibility="gone"/>
+
             <include
                 layout="@layout/gallery_detail_header"/>
 

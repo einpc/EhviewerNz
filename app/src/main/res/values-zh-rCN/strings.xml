@@ -298,6 +298,7 @@
     <string name="no_previews">没有预览</string>
     <string name="no_more_previews">已显示所有预览</string>
     <string name="more_previews">查看更多预览</string>
+    <string name="local_metadata_notice">在线画廊不可用，以下为本地保存的元数据（保存于 %s）</string>
     <string name="refresh">刷新</string>
     <string name="open_in_other_app">在其他应用中打开</string>
     <string name="rate_successfully">评分成功</string>
@@ -457,6 +458,11 @@
     <string name="download_toggle_list_mode">切换列表模式</string>
     <string name="download_search_hint">输入关键字</string>
     <string name="reset_reading_progress_message">重置所有已下载画廊的阅读进度？</string>
+    <string name="download_update_local_metadata">更新所有画廊本地元数据</string>
+    <string name="download_update_local_metadata_message">将按下载列表顺序为每个画廊联网获取并保存本地元数据，使画廊下架后仍能打开详情页。本地导入的画廊会跳过，在线已下架/无法访问的画廊也会跳过。</string>
+    <string name="download_update_local_metadata_progress">正在更新本地元数据 %1$d/%2$d</string>
+    <string name="download_update_local_metadata_done">本地元数据更新完成：已更新 %1$d，跳过 %2$d</string>
+    <string name="download_update_local_metadata_running">本地元数据更新正在进行中</string>
     <string name="download_service_label">EhViewer 下载服务</string>
     <string name="archiver_download_service_label">EhViewer 档案下载</string>
     <string name="archiver_download_pause">暂停</string>
