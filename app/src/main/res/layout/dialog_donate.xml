@@ -31,35 +31,41 @@
         android:layout_height="@dimen/keyline_margin" />
 
 
-    <RelativeLayout
+    <LinearLayout
         android:id="@+id/RelativeLayout1"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:orientation="horizontal">
 
         <ImageView
-            android:layout_width="wrap_content"
-            android:layout_height="@dimen/gallery_page_min_height"
-            android:layout_toStartOf="@+id/image_center"
             android:id="@+id/image_aliPay"
-            android:background="@drawable/zhifubao" />
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:adjustViewBounds="true"
+            android:contentDescription="@null"
+            android:scaleType="fitCenter"
+            android:src="@drawable/zhifubao" />
 
         <View
             android:id="@+id/image_center"
             android:layout_width="1dp"
-            android:layout_height="@dimen/gallery_page_min_height"
-            android:layout_centerInParent="true"
-            android:layout_centerVertical="true"
+            android:layout_height="match_parent"
             android:layout_marginTop="5dp"
             android:layout_marginBottom="10dp"
             android:background="?attr/dividerColor" />
 
         <ImageView
-            android:layout_width="wrap_content"
-            android:layout_height="@dimen/gallery_page_min_height"
-            android:layout_toEndOf="@+id/image_center"
             android:id="@+id/image_weChat"
-            android:background="@drawable/weixin" />
-    </RelativeLayout>
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:adjustViewBounds="true"
+            android:contentDescription="@null"
+            android:scaleType="fitCenter"
+            android:src="@drawable/weixin" />
+    </LinearLayout>
 
 
     <TextView
