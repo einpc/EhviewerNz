@@ -1174,7 +1174,8 @@ public class GalleryActivity extends EhActivity implements SeekBar.OnSeekBarChan
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 mOrientationSwipeActive = false;
-                mOrientationSwipeCandidate = isCurrentImageOrientationDifferent();
+                mOrientationSwipeCandidate =
+                        !isScreenRotationLocked() && isCurrentImageOrientationDifferent();
                 if (mOrientationSwipeCandidate) {
                     mOrientationSwipeDownX = event.getX();
                     mOrientationSwipeDownY = event.getY();
@@ -1241,14 +1242,22 @@ public class GalleryActivity extends EhActivity implements SeekBar.OnSeekBarChan
     }
 
     private void switchOrientationForCurrentImage() {
-        if (!isCurrentImageOrientationDifferent()) {
+        if (!isCurrentImageOrientationDifferent() || isScreenRotationLocked()) {
             return;
         }
         if (isViewportLandscape()) {
-            setPortraitOrientationForSwipe();
+            restoreScreenOrientationForSwipe();
         } else {
             setLandscapeOrientationForReadingDirection();
         }
+    }
+
+    /**
+     * 用户在设置里显式锁定了屏幕方向时，旋转手势不生效，避免覆盖用户的选择。
+     */
+    private boolean isScreenRotationLocked() {
+        int screenRotation = Settings.getScreenRotation();
+        return screenRotation == 1 || screenRotation == 2;
     }
 
     private void setLandscapeOrientationForReadingDirection() {
@@ -1262,15 +1271,34 @@ public class GalleryActivity extends EhActivity implements SeekBar.OnSeekBarChan
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
         }
 
-        Settings.putScreenRotation(2);
+        // 手势只是临时覆盖当前方向，不写入设置，避免永久改写用户的屏幕旋转选择
         updateQuickSettingsButtons();
         setRequestedOrientation(requestedOrientation);
     }
 
-    private void setPortraitOrientationForSwipe() {
-        Settings.putScreenRotation(1);
+    /**
+     * 手势切回竖屏时恢复用户原本的屏幕旋转设置，而不是把它固定成竖屏。
+     */
+    private void restoreScreenOrientationForSwipe() {
+        int orientation;
+        switch (Settings.getScreenRotation()) {
+            default:
+            case 0:
+                orientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+                break;
+            case 1:
+                orientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;
+                break;
+            case 2:
+                orientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
+                break;
+            case 3:
+                orientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR;
+                break;
+        }
+
         updateQuickSettingsButtons();
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
+        setRequestedOrientation(orientation);
     }
 
     private void clearOrientationSwipeGesture() {
