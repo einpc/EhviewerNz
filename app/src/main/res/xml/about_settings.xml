@@ -28,6 +28,14 @@
         android:title="@string/settings_about_author"
         app:allowDividerAbove="true" />
 
+    <com.hippo.preference.UrlPreference
+        android:ellipsize="end"
+        android:key="author_fork"
+        android:singleLine="true"
+        android:summary="@string/settings_about_fork_author_summary"
+        android:title="@string/settings_about_author"
+        app:url="https://github.com/einpc/EhviewerNz" />
+
 
     <com.hippo.preference.UrlPreference
         android:ellipsize="end"
@@ -57,11 +65,6 @@
             android:key="fork_declaration"
             android:summary="@string/settings_about_fork_declaration_summary"
             android:title="@string/settings_about_fork_name" />
-
-        <Preference
-            android:key="fork_author"
-            android:summary="@string/settings_about_fork_author_summary"
-            android:title="@string/settings_about_author" />
 
         <com.hippo.preference.UrlPreference
             android:key="fork_latest_release"

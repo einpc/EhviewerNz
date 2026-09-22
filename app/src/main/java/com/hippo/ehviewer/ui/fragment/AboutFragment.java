@@ -38,10 +38,8 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
 import com.hippo.ehviewer.AppConfig;
-import com.hippo.ehviewer.EhApplication;
 import com.hippo.ehviewer.R;
 import com.hippo.ehviewer.updater.AppUpdater;
-import com.hippo.util.AppHelper;
 import com.hippo.util.ExceptionUtils;
 
 import java.io.File;
@@ -63,10 +61,10 @@ public class AboutFragment extends BasePreferenceFragmentCompat
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
         setPreferencesFromResource(R.xml.about_settings, null);
 
+        // The upstream author is credited with a summary only, it must not be clickable
         Preference author = findPreference(KEY_AUTHOR);
         if (author != null) {
             author.setSummary(getString(R.string.settings_about_author_summary).replace('$', '@'));
-            author.setOnPreferenceClickListener(this);
         }
 
         Preference donate = findPreference(KEY_DONATE);
@@ -83,16 +81,13 @@ public class AboutFragment extends BasePreferenceFragmentCompat
     @Override
     public boolean onPreferenceClick(Preference preference) {
         String key = preference.getKey();
-        Activity activity =getActivity();
-        if (KEY_AUTHOR.equals(key)&&activity!=null) {
-            AppHelper.sendEmail(activity, EhApplication.getDeveloperEmail(),
-                    "About EhViewer", null);
-        } else if (KEY_DONATE.equals(key)) {
+        Activity activity = getActivity();
+        if (KEY_DONATE.equals(key)) {
             showDonationDialog();
-        } else if (KEY_CHECK_FOR_UPDATES.equals(key)&&activity!=null) {
+        } else if (KEY_CHECK_FOR_UPDATES.equals(key) && activity != null) {
 //            Settings.setCheckUpdate(false);
 //            Distribute.checkForUpdate();
-            AppUpdater.update(activity,true);
+            AppUpdater.update(activity, true);
         }
         return true;
     }
@@ -103,7 +98,7 @@ public class AboutFragment extends BasePreferenceFragmentCompat
                 .setView(R.layout.dialog_donate)
                 .show();
 
-        String alipayStr = base64Decode("MTAzMTA4MjA5MUBxcS5jb20=");
+        String alipayStr = base64Decode("ZWlucGNAcXEuY29t");
         TextView alipayText = dialog.findViewById(R.id.alipay_text);
         assert alipayText != null;
         alipayText.setText(alipayStr);
