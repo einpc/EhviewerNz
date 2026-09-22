@@ -16,12 +16,16 @@
 
 package com.hippo.ehviewer.download;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import com.hippo.ehviewer.EhApplication;
 import com.hippo.ehviewer.R;
@@ -44,19 +48,16 @@ import okhttp3.OkHttpClient;
  * Fetches the detail of every gallery in the download list, in list order, and stores it in the
  * gallery's download folder. Locally imported galleries are skipped, and so are galleries that are
  * no longer available online.
+ *
+ * <p>Runs in the background and reports its progress through a notification, so the user can keep
+ * reading galleries while it works.
  */
 public final class GalleryDetailMetadataBatchTask
         extends AsyncTask<Void, int[], GalleryDetailMetadataBatchTask.Result> {
 
-    public interface Listener {
-
-        void onProgress(int current, int total);
-
-        void onFinished(int updated, int skipped);
-    }
-
     private static final AtomicBoolean RUNNING = new AtomicBoolean();
 
+    private static final int NOTIFICATION_ID = 0x4d455441;
     private static final int BURST_SIZE = 10;
     private static final long BURST_PAUSE_MS = 2000L;
 
@@ -73,14 +74,13 @@ public final class GalleryDetailMetadataBatchTask
 
     private final Context application;
     private final OkHttpClient okHttpClient;
-    @Nullable
-    private final Listener listener;
     private final List<DownloadInfo> pending = new ArrayList<>();
+    private NotificationManager notificationManager;
+    private NotificationCompat.Builder notificationBuilder;
     private boolean ownsRunningFlag;
 
-    public GalleryDetailMetadataBatchTask(@NonNull Context context, @Nullable Listener listener) {
+    public GalleryDetailMetadataBatchTask(@NonNull Context context) {
         application = context.getApplicationContext();
-        this.listener = listener;
         okHttpClient = EhApplication.getOkHttpClient(application);
         DownloadManager manager = EhApplication.getDownloadManager(application);
         for (DownloadInfo info : new ArrayList<>(manager.getAllDownloadInfoList())) {
@@ -96,16 +96,14 @@ public final class GalleryDetailMetadataBatchTask
         return RUNNING.get();
     }
 
-    public int getTotal() {
-        return pending.size();
-    }
-
     @Override
     protected void onPreExecute() {
         ownsRunningFlag = RUNNING.compareAndSet(false, true);
         if (!ownsRunningFlag) {
             cancel(false);
+            return;
         }
+        showProgressNotification(0);
     }
 
     @Override
@@ -151,8 +149,8 @@ public final class GalleryDetailMetadataBatchTask
 
     @Override
     protected void onProgressUpdate(int[]... values) {
-        if (listener != null && values.length != 0) {
-            listener.onProgress(values[0][0], values[0][1]);
+        if (values.length != 0) {
+            showProgressNotification(values[0][0]);
         }
     }
 
@@ -161,18 +159,92 @@ public final class GalleryDetailMetadataBatchTask
         if (ownsRunningFlag) {
             RUNNING.set(false);
         }
-        if (listener != null) {
-            listener.onFinished(result.updated, result.skipped);
-        }
-        Toast.makeText(application, application.getString(
-                        R.string.download_update_local_metadata_done, result.updated, result.skipped),
-                Toast.LENGTH_LONG).show();
+        String resultText = application.getString(
+                R.string.download_update_local_metadata_done, result.updated, result.skipped);
+        showCompletedNotification(resultText);
+        Toast.makeText(application, resultText, Toast.LENGTH_LONG).show();
     }
 
     @Override
     protected void onCancelled() {
         if (ownsRunningFlag) {
             RUNNING.set(false);
+        }
+        cancelNotification();
+    }
+
+    private void showProgressNotification(int current) {
+        ensureNotificationBuilder();
+        if (notificationBuilder == null || notificationManager == null) {
+            return;
+        }
+        int total = pending.size();
+        notificationBuilder
+                .setContentText(application.getString(
+                        R.string.download_update_local_metadata_progress, current, total))
+                .setContentInfo(current + "/" + total)
+                .setProgress(total, current, total == 0);
+        notifySafely();
+    }
+
+    private void showCompletedNotification(@NonNull String resultText) {
+        ensureNotificationBuilder();
+        if (notificationBuilder == null || notificationManager == null) {
+            return;
+        }
+        notificationBuilder
+                .setContentText(resultText)
+                .setContentInfo(null)
+                .setProgress(0, 0, false)
+                .setOngoing(false)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS);
+        notifySafely();
+    }
+
+    private void ensureNotificationBuilder() {
+        if (notificationBuilder != null) {
+            return;
+        }
+        notificationManager = (NotificationManager) application.getSystemService(
+                Context.NOTIFICATION_SERVICE);
+        if (notificationManager == null) {
+            return;
+        }
+        String channelId = application.getPackageName() + ".gallery_detail_metadata";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(channelId,
+                    application.getString(R.string.download_update_local_metadata),
+                    NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription(application.getString(
+                    R.string.download_update_local_metadata_message));
+            channel.enableVibration(false);
+            channel.setSound(null, null);
+            notificationManager.createNotificationChannel(channel);
+        }
+        notificationBuilder = new NotificationCompat.Builder(application, channelId)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle(application.getString(
+                        R.string.download_update_local_metadata))
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setColor(ContextCompat.getColor(application, R.color.colorPrimary));
+    }
+
+    private void notifySafely() {
+        try {
+            notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build());
+        } catch (RuntimeException ignored) {
+            // Notification permission may be denied; the update should continue regardless.
+        }
+    }
+
+    private void cancelNotification() {
+        if (notificationManager != null) {
+            notificationManager.cancel(NOTIFICATION_ID);
         }
     }
 }

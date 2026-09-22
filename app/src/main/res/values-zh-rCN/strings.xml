@@ -459,7 +459,7 @@
     <string name="download_search_hint">输入关键字</string>
     <string name="reset_reading_progress_message">重置所有已下载画廊的阅读进度？</string>
     <string name="download_update_local_metadata">更新所有画廊本地元数据</string>
-    <string name="download_update_local_metadata_message">将按下载列表顺序为每个画廊联网获取并保存本地元数据，使画廊下架后仍能打开详情页。本地导入的画廊会跳过，在线已下架/无法访问的画廊也会跳过。</string>
+    <string name="download_update_local_metadata_message">将按下载列表顺序为每个画廊联网获取并保存本地元数据，使画廊下架后仍能打开详情页。任务在后台运行，进度显示在通知栏，不影响你继续看漫画。本地导入的画廊会跳过，在线已下架/无法访问的画廊也会跳过。</string>
     <string name="download_update_local_metadata_progress">正在更新本地元数据 %1$d/%2$d</string>
     <string name="download_update_local_metadata_done">本地元数据更新完成：已更新 %1$d，跳过 %2$d</string>
     <string name="download_update_local_metadata_running">本地元数据更新正在进行中</string>

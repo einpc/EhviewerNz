@@ -551,7 +551,7 @@
     <string name="download_search_hint">Input search key</string>
     <string name="reset_reading_progress_message">Reset the reading progress of all downloaded galleries?</string>
     <string name="download_update_local_metadata">Update local metadata of all galleries</string>
-    <string name="download_update_local_metadata_message">Fetch and store the metadata of every gallery in the download list, so its detail page still works after the online gallery is removed. Locally imported galleries are skipped, and galleries that are no longer available online are skipped as well.</string>
+    <string name="download_update_local_metadata_message">Fetch and store the metadata of every gallery in the download list, so its detail page still works after the online gallery is removed. It runs in the background with the progress shown in the notification bar, so you can keep reading. Locally imported galleries are skipped, and galleries that are no longer available online are skipped as well.</string>
     <string name="download_update_local_metadata_progress">Updating local metadata %1$d/%2$d</string>
     <string name="download_update_local_metadata_done">Local metadata updated: %1$d updated, %2$d skipped</string>
     <string name="download_update_local_metadata_running">Local metadata update is already running</string>

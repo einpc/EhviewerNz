@@ -188,8 +188,6 @@ public class DownloadsScene extends ToolbarScene
     @Nullable
     private DownloadManager mDownloadManager;
     @Nullable
-    private AlertDialog mMetadataProgressDialog;
-    @Nullable
     public String mLabel;
     @Nullable
     private List<DownloadInfo> mList;
@@ -947,7 +945,6 @@ public class DownloadsScene extends ToolbarScene
         mPaginationIndicator = null;
         myPageChangeListener = null;
         needInitPage = false;
-        dismissMetadataProgressDialog();
         EventBus.getDefault().unregister(this);
     }
 
@@ -1021,8 +1018,8 @@ public class DownloadsScene extends ToolbarScene
                 new AlertDialog.Builder(context)
                         .setMessage(R.string.download_update_local_metadata_message)
                         .setNegativeButton(android.R.string.cancel, null)
-                        .setPositiveButton(android.R.string.ok,
-                                (dialog, which) -> startLocalMetadataUpdate(context))
+                        .setPositiveButton(android.R.string.ok, (dialog, which) ->
+                                new GalleryDetailMetadataBatchTask(context).execute())
                         .show();
                 return true;
             }
@@ -2394,45 +2391,6 @@ public class DownloadsScene extends ToolbarScene
                 }
 
             }
-        }
-    }
-
-    /**
-     * Fetches and stores the metadata of every gallery in the download list, in list order, so the
-     * detail page still works after the online gallery has been removed.
-     */
-    private void startLocalMetadataUpdate(@NonNull Context context) {
-        GalleryDetailMetadataBatchTask.Listener listener =
-                new GalleryDetailMetadataBatchTask.Listener() {
-                    @Override
-                    public void onProgress(int current, int total) {
-                        if (mMetadataProgressDialog != null) {
-                            mMetadataProgressDialog.setMessage(getString(
-                                    R.string.download_update_local_metadata_progress,
-                                    current, total));
-                        }
-                    }
-
-                    @Override
-                    public void onFinished(int updated, int skipped) {
-                        dismissMetadataProgressDialog();
-                    }
-                };
-        GalleryDetailMetadataBatchTask task = new GalleryDetailMetadataBatchTask(context, listener);
-        mMetadataProgressDialog = new AlertDialog.Builder(context)
-                .setTitle(R.string.download_update_local_metadata)
-                .setMessage(getString(R.string.download_update_local_metadata_progress,
-                        0, task.getTotal()))
-                .setNegativeButton(android.R.string.cancel, (dialog, which) -> task.cancel(false))
-                .setCancelable(false)
-                .show();
-        task.execute();
-    }
-
-    private void dismissMetadataProgressDialog() {
-        if (mMetadataProgressDialog != null) {
-            mMetadataProgressDialog.dismiss();
-            mMetadataProgressDialog = null;
         }
     }
 
