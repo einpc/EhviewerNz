@@ -1,8 +1,6 @@
 # EhViewerNz
 
-EhViewerNz 是基于 [Ehviewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_CN_SXJ) 的 Fork, 着重于添加用户操作体验相关功能。
-- 发布分支: [BiLi_PC_Gamer](https://github.com/einpc/EhviewerNz)
-- 开发分支: [Dev_Test](https://github.com/einpc/EhviewerNz/tree/Dev_Test)
+当前版本的EhViewerNz 是基于 [BiLi_PC_Gamer](https://github.com/einpc/EhviewerNz) 的 Fork, 主要是根据个人操作体验进行调整适配。
 
 ## 更新日志
 
@@ -22,7 +20,7 @@ EhViewerNz 是基于 [Ehviewer_CN_SXJ](https://github.com/xiaojieonly/Ehviewer_C
   - 手势切换方向时不再写入“屏幕旋转”设置，滑回时恢复用户原本的设置，避免被永久锁定为横屏。
 - “更新与支持”页面中的检查更新、最新版本、问题帮助、更新日志与支持链接全部指向本仓库 `einpc/EhviewerNz`。
 
-## 主要功能
+## 主要功能（上游原版功能）
 
 ### 功能与设置
 
