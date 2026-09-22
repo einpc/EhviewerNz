@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class GalleryView extends GLView implements GestureRecognizer.Listener {
 
@@ -175,6 +176,7 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
 
     private final AtomicInteger mCurrentIndex = new AtomicInteger(GalleryPageView.INVALID_INDEX);
     private final AtomicLong mCurrentImageSize = new AtomicLong();
+    private final AtomicReference<ImageTexture> mCurrentImageTexture = new AtomicReference<>();
 
     public static class Builder {
 
@@ -501,6 +503,16 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
         int height = (int) size;
         return width > 0 && height > 0 && width != height
                 && (width > height) != viewportLandscape;
+    }
+
+    /**
+     * Returns the image texture of the current page. The texture is updated on the render thread and
+     * can safely be queried by the UI thread, unlike {@link #findPageByIndex(int)} which iterates
+     * the pages owned by the render thread.
+     */
+    @Nullable
+    public ImageTexture getCurrentImageTexture() {
+        return mCurrentImageTexture.get();
     }
 
     @Override
@@ -1122,7 +1134,7 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
         mCurrentIndex.lazySet(newCurrentIndex);
 
         if (oldCurrentIndex != newCurrentIndex) {
-            updateCurrentImageSize(newCurrentIndex);
+            updateCurrentPageSnapshot(newCurrentIndex);
             if (mListener != null) {
                 mListener.onUpdateCurrentIndex(newCurrentIndex);
             }
@@ -1140,7 +1152,7 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
 
     void notifyPageImageReady(int index) {
         if (index == mCurrentIndex.get()) {
-            updateCurrentImageSize(index);
+            updateCurrentPageSnapshot(index);
         }
         if (mListener != null) {
             mListener.onPageImageReady(index);
@@ -1148,13 +1160,14 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
     }
 
     @RenderThread
-    private void updateCurrentImageSize(int index) {
+    private void updateCurrentPageSnapshot(int index) {
         GalleryPageView page = mLayoutManager == null
                 ? null : mLayoutManager.findPageByIndex(index);
         ImageTexture texture = page == null ? null : page.getImageTexture();
         long size = texture == null ? 0L
                 : ((long) texture.getWidth() << 32) | (texture.getHeight() & 0xffffffffL);
         mCurrentImageSize.lazySet(size);
+        mCurrentImageTexture.lazySet(texture);
     }
 
     GalleryPageView obtainPage() {

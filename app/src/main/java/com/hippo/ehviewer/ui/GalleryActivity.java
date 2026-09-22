@@ -2670,8 +2670,7 @@ public class GalleryActivity extends EhActivity implements SeekBar.OnSeekBarChan
         if (mGalleryView == null || mGalleryProvider == null || mCurrentIndex < 0) {
             return false;
         }
-        GalleryPageView page = mGalleryView.findPageByIndex(mCurrentIndex);
-        ImageTexture texture = page != null ? page.getImageTexture() : null;
+        ImageTexture texture = mGalleryView.getCurrentImageTexture();
         if (texture == null || !texture.isControllableAnimationSource()) {
             mAnimatedWebpReloadSourceTexture = null;
             return false;
@@ -2736,8 +2735,7 @@ public class GalleryActivity extends EhActivity implements SeekBar.OnSeekBarChan
         ImageTexture candidate = null;
         if (mLayoutMode != GalleryView.LAYOUT_TOP_TO_BOTTOM && mGalleryView != null &&
                 mCurrentIndex >= 0) {
-            GalleryPageView page = mGalleryView.findPageByIndex(mCurrentIndex);
-            ImageTexture texture = page != null ? page.getImageTexture() : null;
+            ImageTexture texture = mGalleryView.getCurrentImageTexture();
             if (texture != null && texture.isControllableAnimation()) candidate = texture;
         }
 
