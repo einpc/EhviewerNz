@@ -60,6 +60,11 @@
             android:icon="@drawable/v_heart_black_x24"/>
 
         <item
+            android:id="@+id/nav_downloads"
+            android:title="@string/downloads"
+            android:icon="@drawable/v_download_black_x24"/>
+
+        <item
             android:id="@+id/nav_history"
             android:title="@string/history"
             android:icon="@drawable/v_history_black_x24"/>
@@ -69,11 +74,6 @@
             android:checkable="false"
             android:title="@string/settings_search_language"
             android:icon="@drawable/v_magnify_dark_x24"/>
-
-        <item
-            android:id="@+id/nav_downloads"
-            android:title="@string/downloads"
-            android:icon="@drawable/v_download_black_x24"/>
 
 <!--        <item-->
 <!--            android:id="@+id/nav_eh_news"-->
