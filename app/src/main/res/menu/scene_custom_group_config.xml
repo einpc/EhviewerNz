@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  ~ Copyright 2016 Hippo Seven
+  ~ Copyright 2026 EhViewer contributors
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -20,27 +20,15 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
-        android:id="@+id/action_switch_download_mode"
-        android:icon="@drawable/v_label_dark_x24"
-        android:title="@string/custom_group_switch_to_groups"
+        android:id="@+id/action_add_custom_group_dimension"
+        android:icon="@drawable/v_plus_dark_x24"
+        android:title="@string/custom_group_add_dimension"
         app:showAsAction="always"/>
 
     <item
-        android:id="@+id/action_default_download_label"
-        android:icon="@drawable/v_download_box_dark_x24"
-        android:title="@string/default_download_label"
-        app:showAsAction="ifRoom"/>
-
-    <item
-        android:id="@+id/action_custom_group_settings"
-        android:icon="@drawable/v_tune_dark_x24"
-        android:title="@string/custom_group_settings"
-        app:showAsAction="ifRoom"/>
-
-    <item
-        android:id="@+id/action_settings"
-        android:icon="@drawable/v_settings_dark_x24"
-        android:title="@string/settings"
-        app:showAsAction="ifRoom"/>
+        android:id="@+id/action_reset_custom_group"
+        android:icon="@drawable/v_return_curve_dark_x24"
+        android:title="@string/custom_group_reset_default"
+        app:showAsAction="always"/>
 
 </menu>

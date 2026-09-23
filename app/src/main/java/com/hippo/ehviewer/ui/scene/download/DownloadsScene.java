@@ -97,6 +97,10 @@ import com.hippo.ehviewer.client.data.ListUrlBuilder;
 import com.hippo.ehviewer.dao.DownloadInfo;
 import com.hippo.ehviewer.dao.DownloadLabel;
 import com.hippo.ehviewer.dao.GalleryTags;
+import com.hippo.ehviewer.download.CustomGroupConfig;
+import com.hippo.ehviewer.download.CustomGroupItem;
+import com.hippo.ehviewer.download.CustomGroupOrganizer;
+import com.hippo.ehviewer.download.CustomGroupStore;
 import com.hippo.ehviewer.download.DownloadManager;
 import com.hippo.ehviewer.download.DownloadQuickOrganizer;
 import com.hippo.ehviewer.download.DownloadLabelSearchQueryResolver;
@@ -195,6 +199,18 @@ public class DownloadsScene extends ToolbarScene
     private List<DownloadInfo> mBackList;
     private boolean mContinuousLabelBrowse;
     private boolean mForceSingleLabelBrowse;
+    private boolean mCustomGroupMode;
+    @Nullable
+    private String mCustomGroupKey;
+    @Nullable
+    private List<CustomGroupItem> mCustomGroups;
+    private int mCustomGroupRequestToken;
+    /** Group whose gallery order is being changed by the current drag. */
+    @Nullable
+    private String mDraggedCustomGroupKey;
+    /** Guards against several group recomputations running at the same time. */
+    private boolean mCustomGroupRefreshRunning;
+    private boolean mCustomGroupRefreshPending;
     private final List<ContinuousDownloadItem> mContinuousItems = new ArrayList<>();
     private final Map<Long, Integer> mContinuousGalleryPositions = new HashMap<>();
     private final Map<String, Integer> mContinuousHeaderPositions = new HashMap<>();
@@ -381,7 +397,10 @@ public class DownloadsScene extends ToolbarScene
         Bundle args = getArguments();
         mForceSingleLabelBrowse = args != null
                 && args.getBoolean(KEY_FORCE_SINGLE_LABEL_MODE, false);
+        mCustomGroupMode = !mForceSingleLabelBrowse
+                && Settings.getDownloadCustomGroupMode();
         mContinuousLabelBrowse = !mForceSingleLabelBrowse
+                && !mCustomGroupMode
                 && Settings.getDownloadLabelContinuousBrowse();
         canPagination = Settings.getDownloadPagination();
         if (savedInstanceState == null) {
@@ -421,7 +440,17 @@ public class DownloadsScene extends ToolbarScene
             return;
         }
 
-        if (mContinuousLabelBrowse) {
+        if (mCustomGroupMode) {
+            // Custom group mode always browses all downloads; the label selection is irrelevant.
+            mLabel = null;
+            List<DownloadInfo> allDownloads =
+                    new ArrayList<>(mDownloadManager.getAllDownloadInfoList());
+            if (isCustomGroupOverview()) {
+                rebuildCustomGroupItems(allDownloads, true);
+            } else {
+                mList = allDownloads;
+            }
+        } else if (mContinuousLabelBrowse) {
             mLabel = null;
             List<DownloadInfo> allDownloads = new ArrayList<>(
                     mDownloadManager.getAllDownloadInfoList().size());
@@ -444,15 +473,19 @@ public class DownloadsScene extends ToolbarScene
             }
         }
 
+        // The custom group filter applies to the base list; search, category and state filters
+        // are layered on top of it afterwards.
+        mList = applyCustomGroupFilter(mList);
+
         if (mAdapter != null) {
             mAdapter.notifyDataSetChanged();
         }
-        mBackList = mContinuousLabelBrowse && mList != null
+        mBackList = isGroupedBrowse() && mList != null
                 ? new ArrayList<>(mList) : mList;
 //        filterByCategory();
         updateTitle();
         updatePaginationIndicator();
-        if (!mContinuousLabelBrowse) {
+        if (!mContinuousLabelBrowse && !mCustomGroupMode) {
             Settings.putRecentDownloadLabel(mLabel);
         }
         queryUnreadSpiderInfo();
@@ -544,11 +577,61 @@ public class DownloadsScene extends ToolbarScene
         }
     }
 
+    /** True when custom group mode browses every group with in-list section headers. */
+    private boolean isCustomGroupOverview() {
+        return mCustomGroupMode && mCustomGroupKey == null && mCustomGroups != null;
+    }
+
+    /** True when the main list is split into sections with in-list headers. */
+    private boolean isGroupedBrowse() {
+        return mContinuousLabelBrowse || isCustomGroupOverview();
+    }
+
+    /**
+     * Rebuilds the sectioned list of custom group mode. It reuses the very same item structure and
+     * adapter header view type as the continuous label browse, only the buckets differ: the groups
+     * come from {@link #mCustomGroups} instead of the download labels.
+     */
+    private void rebuildCustomGroupItems(@NonNull List<DownloadInfo> source,
+            boolean includeEmptyGroups) {
+        mContinuousItems.clear();
+        mContinuousGalleryPositions.clear();
+        mContinuousHeaderPositions.clear();
+        if (mCustomGroups == null) {
+            mList = source;
+            return;
+        }
+
+        Map<Long, DownloadInfo> downloadsByGid = new HashMap<>(Math.max(16, source.size() * 2));
+        for (DownloadInfo info : source) {
+            downloadsByGid.put(info.gid, info);
+        }
+
+        List<DownloadInfo> orderedDownloads = new ArrayList<>(source.size());
+        for (CustomGroupItem group : mCustomGroups) {
+            List<DownloadInfo> downloads = new ArrayList<>(group.gids.size());
+            for (Long gid : group.gids) {
+                DownloadInfo info = downloadsByGid.get(gid);
+                if (info != null) {
+                    downloads.add(info);
+                }
+            }
+            if (downloads.isEmpty() && !includeEmptyGroups) {
+                continue;
+            }
+            String title = group.displayName != null
+                    ? group.displayName : resolveCustomGroupName(group.key);
+            long stableId = Long.MIN_VALUE / 2L + group.key.hashCode();
+            appendContinuousSection(group.key, title, stableId, downloads, orderedDownloads);
+        }
+        mList = orderedDownloads;
+    }
+
     private void updatePaginationIndicator() {
         if (mPaginationIndicator == null || mList == null) {
             return;
         }
-        if (mContinuousLabelBrowse || mList.size() < paginationSize || !canPagination) {
+        if (isGroupedBrowse() || mList.size() < paginationSize || !canPagination) {
             mPaginationIndicator.setVisibility(View.GONE);
             return;
         }
@@ -569,9 +652,17 @@ public class DownloadsScene extends ToolbarScene
 
     @SuppressLint("StringFormatMatches")
     private void updateTitle() {
-        if (mContinuousLabelBrowse) {
+        if (mContinuousLabelBrowse && !mCustomGroupMode) {
             setTitle(getString(R.string.scene_download_continuous_title,
                     mList == null ? 0 : mList.size()));
+            return;
+        }
+        if (mCustomGroupMode) {
+            String name = mCustomGroupKey == null
+                    ? getString(R.string.custom_group_title)
+                    : resolveCustomGroupName(mCustomGroupKey);
+            setTitle(getString(R.string.scene_download_title_new, name,
+                    Integer.toString(mList == null ? 0 : mList.size())));
             return;
         }
         try {
@@ -751,7 +842,7 @@ public class DownloadsScene extends ToolbarScene
         mRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-                if (mContinuousLabelBrowse) {
+                if (isGroupedBrowse()) {
                     queryVisibleSpiderInfo();
                 }
             }
@@ -820,6 +911,7 @@ public class DownloadsScene extends ToolbarScene
         TooltipCompat.setTooltipText(
                 mFabLayout.getSecondaryFabAt(FAB_QUICK_ORGANIZE),
                 getString(R.string.quick_organize));
+        updateMoveFabHint();
         addAboveSnackView(mFabLayout);
 
         updateView();
@@ -923,6 +1015,9 @@ public class DownloadsScene extends ToolbarScene
     public void onDestroyView() {
         super.onDestroyView();
 
+        // A recomputation that is still in flight will not deliver its result anymore.
+        mCustomGroupRefreshRunning = false;
+        mCustomGroupRefreshPending = false;
         if (null != mShowcaseView) {
             ViewUtils.removeFromParent(mShowcaseView);
             mShowcaseView = null;
@@ -1155,7 +1250,7 @@ public class DownloadsScene extends ToolbarScene
 
     public void updateView() {
         if (mViewTransition != null) {
-            boolean empty = mContinuousLabelBrowse
+            boolean empty = isGroupedBrowse()
                     ? mContinuousItems.isEmpty()
                     : mList == null || mList.isEmpty();
             if (empty) {
@@ -1171,6 +1266,9 @@ public class DownloadsScene extends ToolbarScene
                                    @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         if (downloadLabelDraw == null) {
             downloadLabelDraw = new DownloadLabelDraw(inflater, container, this);
+        }
+        if (mCustomGroupMode && mCustomGroups == null) {
+            refreshCustomGroups();
         }
 
         return downloadLabelDraw.createView();
@@ -1211,7 +1309,7 @@ public class DownloadsScene extends ToolbarScene
             return false;
         }
 
-        if (mContinuousLabelBrowse && isLabelHeaderPosition(position)) {
+        if (isGroupedBrowse() && isLabelHeaderPosition(position)) {
             return true;
         }
 
@@ -1283,7 +1381,7 @@ public class DownloadsScene extends ToolbarScene
             return false;
         }
 
-        if (mContinuousLabelBrowse && isLabelHeaderPosition(position)) {
+        if (isGroupedBrowse() && isLabelHeaderPosition(position)) {
             return true;
         }
 
@@ -1354,8 +1452,16 @@ public class DownloadsScene extends ToolbarScene
     @Override
     public void onLabelHeaderClick(int position) {
         MyEasyRecyclerView recyclerView = mRecyclerView;
-        if (!mContinuousLabelBrowse || recyclerView == null
-                || recyclerView.isInCustomChoice() || !isLabelHeaderPosition(position)) {
+        if (recyclerView == null || recyclerView.isInCustomChoice()
+                || !isLabelHeaderPosition(position)) {
+            return;
+        }
+        if (isCustomGroupOverview()) {
+            // The drawer entry actions (rename / restore default name) are reused here.
+            showCustomGroupActions(mContinuousItems.get(position).label);
+            return;
+        }
+        if (!mContinuousLabelBrowse) {
             return;
         }
         showRenameContinuousLabelDialog(mContinuousItems.get(position).label);
@@ -1363,7 +1469,11 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public boolean onLabelHeaderLongClick(int position) {
-        if (!mContinuousLabelBrowse || !isLabelHeaderPosition(position)) {
+        if (!isLabelHeaderPosition(position) || isCustomGroupOverview()) {
+            // A custom group header is reordered by its drag handle and its actions are on a tap.
+            return false;
+        }
+        if (!mContinuousLabelBrowse) {
             return false;
         }
         String query = DownloadLabelSearchQueryResolver.resolve(
@@ -1386,7 +1496,15 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public void onCollapsedLabelClick(int position) {
-        if (!mContinuousLabelBrowse || !isLabelHeaderCollapsed(position)) {
+        if (!isLabelHeaderCollapsed(position)) {
+            return;
+        }
+        if (isCustomGroupOverview()) {
+            // Selecting the group shows the full flat list of that group.
+            onCustomGroupItemClick(mContinuousItems.get(position).label);
+            return;
+        }
+        if (!mContinuousLabelBrowse) {
             return;
         }
         rememberContinuousScrollPosition();
@@ -1438,7 +1556,7 @@ public class DownloadsScene extends ToolbarScene
 
         if (0 == position) {
             recyclerView.checkAll();
-            if (mContinuousLabelBrowse) {
+            if (isGroupedBrowse()) {
                 SparseBooleanArray checked = recyclerView.getCheckedItemPositions();
                 for (int i = checked.size() - 1; i >= 0; i--) {
                     int adapterPosition = checked.keyAt(i);
@@ -1510,6 +1628,18 @@ public class DownloadsScene extends ToolbarScene
                     if (downloadInfoList.isEmpty()) {
                         break;
                     }
+                    if (mCustomGroupMode && mCustomGroupKey != null) {
+                        // Inside a single custom group the delete action may only mean "leave this
+                        // group", so it gets its own dialog.
+                        showCustomGroupDeleteDialog(context, downloadInfoList);
+                        break;
+                    }
+                    if (mCustomGroupMode) {
+                        // In the group overview the galleries are shown under every group they are
+                        // in, so leaving the groups has to be offered as well.
+                        showCustomGroupOverviewDeleteDialog(context, downloadInfoList);
+                        break;
+                    }
                     boolean containsRegularGallery = false;
                     for (DownloadInfo info : downloadInfoList) {
                         if (!isImportedGallery(info)) {
@@ -1531,6 +1661,10 @@ public class DownloadsScene extends ToolbarScene
                 }
                 case 4: {// Move
                     if (downloadInfoList.isEmpty()) {
+                        break;
+                    }
+                    if (mCustomGroupMode) {
+                        showMoveToGroupDialog(context, downloadInfoList);
                         break;
                     }
                     List<DownloadLabel> labelRawList = EhApplication.getDownloadManager(context).getLabelList();
@@ -1586,10 +1720,19 @@ public class DownloadsScene extends ToolbarScene
     @Override
     public void onResume() {
         super.onResume();
+        boolean customGroupMode = !mForceSingleLabelBrowse
+                && Settings.getDownloadCustomGroupMode();
+        if (customGroupMode != mCustomGroupMode) {
+            setCustomGroupMode(customGroupMode);
+        }
         boolean continuousLabelBrowse = !mForceSingleLabelBrowse
+                && !mCustomGroupMode
                 && Settings.getDownloadLabelContinuousBrowse();
         if (continuousLabelBrowse != mContinuousLabelBrowse) {
             applyDownloadListMode(continuousLabelBrowse);
+        }
+        if (mCustomGroupMode) {
+            refreshCustomGroups();
         }
         restoreContinuousScrollPosition();
     }
@@ -1611,9 +1754,7 @@ public class DownloadsScene extends ToolbarScene
         if (mLayoutManager != null) {
             mLayoutManager.scrollToPositionWithOffset(0, 0);
         }
-        if (downloadLabelDraw != null) {
-            downloadLabelDraw.updateDownloadLabels();
-        }
+        updateDownloadLabelDraw();
     }
 
     private void quickOrganizeDownloads(@NonNull Context context,
@@ -1712,9 +1853,7 @@ public class DownloadsScene extends ToolbarScene
         updateTitle();
         updatePaginationIndicator();
         updateView();
-        if (downloadLabelDraw != null) {
-            downloadLabelDraw.updateDownloadLabels();
-        }
+        updateDownloadLabelDraw();
         Toast.makeText(context, getString(R.string.quick_organize_result,
                 organizedCount, skippedCount), Toast.LENGTH_LONG).show();
     }
@@ -1754,6 +1893,11 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public void onAdd(@NonNull DownloadInfo info, @NonNull List<DownloadInfo> list, int position) {
+        if (mCustomGroupMode) {
+            // The list is a snapshot of all downloads, so rebuild it and the group counts.
+            updateDownloadLabelDraw();
+            return;
+        }
         if (mContinuousLabelBrowse) {
             refreshContinuousStructure();
             return;
@@ -1805,7 +1949,7 @@ public class DownloadsScene extends ToolbarScene
         if (mList == null || (mList != list && !mList.contains(info))) {
             return;
         }
-        if (mContinuousLabelBrowse && info.state == DownloadInfo.STATE_FINISH) {
+        if (isGroupedBrowse() && info.state == DownloadInfo.STATE_FINISH) {
             requestSpiderInfo(Collections.singletonList(info));
         }
         int index = mList.indexOf(info);
@@ -1828,6 +1972,10 @@ public class DownloadsScene extends ToolbarScene
     @SuppressLint("NotifyDataSetChanged")
     @Override
     public void onReload() {
+        if (mCustomGroupMode) {
+            updateDownloadLabelDraw();
+            return;
+        }
         if (mContinuousLabelBrowse) {
             refreshContinuousStructure();
             return;
@@ -1875,6 +2023,11 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public void onRemove(@NonNull DownloadInfo info, @NonNull List<DownloadInfo> list, int position) {
+        if (mCustomGroupMode) {
+            // The list is a snapshot of all downloads, so rebuild it and the group counts.
+            updateDownloadLabelDraw();
+            return;
+        }
         if (mContinuousLabelBrowse) {
             if (mList != null) {
                 mList = new ArrayList<>(mList);
@@ -1897,9 +2050,7 @@ public class DownloadsScene extends ToolbarScene
         if (mContinuousLabelBrowse) {
             refreshContinuousStructure();
         }
-        if (downloadLabelDraw != null) {
-            downloadLabelDraw.updateDownloadLabels();
-        }
+        updateDownloadLabelDraw();
     }
 
     private void refreshContinuousStructure() {
@@ -1938,6 +2089,658 @@ public class DownloadsScene extends ToolbarScene
         return mDownloadManager;
     }
 
+    public boolean isCustomGroupMode() {
+        return mCustomGroupMode;
+    }
+
+    /** Cached result of {@link CustomGroupOrganizer#organize}, may be null before the first run. */
+    @Nullable
+    public List<CustomGroupItem> getCustomGroups() {
+        return mCustomGroups;
+    }
+
+    /** Switches the right drawer between the download labels and the custom groups. */
+    public void toggleDownloadMode() {
+        setCustomGroupMode(!mCustomGroupMode);
+    }
+
+    private void setCustomGroupMode(boolean customGroupMode) {
+        if (customGroupMode == mCustomGroupMode) {
+            return;
+        }
+        mCustomGroupMode = customGroupMode;
+        Settings.setDownloadCustomGroupMode(customGroupMode);
+
+        // Drop the state that belongs to the other mode.
+        mCustomGroupKey = null;
+        mLabel = null;
+        searchKey = null;
+        mSelectedCategory = EhUtils.ALL_CATEGORY;
+        indexPage = 1;
+        if (mCategorySpinner != null) {
+            mCategorySpinner.setSelection(0);
+        }
+        if (mRecyclerView != null && mRecyclerView.isInCustomChoice()) {
+            mRecyclerView.outOfCustomChoiceMode();
+        }
+        mContinuousLabelBrowse = !mForceSingleLabelBrowse
+                && !customGroupMode
+                && Settings.getDownloadLabelContinuousBrowse();
+        mContinuousItems.clear();
+        mContinuousGalleryPositions.clear();
+        mContinuousHeaderPositions.clear();
+
+        if (mCustomGroupMode) {
+            refreshCustomGroups();
+        }
+        updateForLabel();
+        updateView();
+        if (mLayoutManager != null) {
+            mLayoutManager.scrollToPositionWithOffset(0, 0);
+        }
+        if (downloadLabelDraw != null) {
+            downloadLabelDraw.updateDownloadLabels();
+        }
+        updateMoveFabHint();
+    }
+
+    /** The move FAB moves to a label in label mode and to a group in custom group mode. */
+    private void updateMoveFabHint() {
+        if (mFabLayout == null) {
+            return;
+        }
+        FloatingActionButton moveFab = mFabLayout.getSecondaryFabAt(4);
+        if (moveFab == null) {
+            return;
+        }
+        TooltipCompat.setTooltipText(moveFab,
+                mCustomGroupMode ? getString(R.string.custom_group_move_to_groups) : null);
+    }
+
+    /** Selects the given custom group. Selecting the open one again keeps it open. */
+    public void onCustomGroupItemClick(@Nullable String key) {
+        if (key == null) {
+            return;
+        }
+        mCustomGroupKey = key;
+        refreshListForCustomGroupFilter();
+    }
+
+    /** Leaves the open custom group and shows the overview of every group again. */
+    public void onCustomGroupOverviewClick() {
+        if (mCustomGroupKey == null) {
+            return;
+        }
+        mCustomGroupKey = null;
+        refreshListForCustomGroupFilter();
+    }
+
+    /**
+     * Shows the rename actions of a custom group entry. The group order is changed by dragging the
+     * entry instead, and a fixed group cannot be renamed, so it has no action at all.
+     */
+    public void showCustomGroupActions(@Nullable String key) {
+        if (!mCustomGroupMode || key == null || isFixedCustomGroupKey(key)) {
+            return;
+        }
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        List<String> actions = new ArrayList<>();
+        actions.add(getString(R.string.custom_group_rename));
+        actions.add(getString(R.string.custom_group_reset_name));
+        new AlertDialog.Builder(context)
+                .setTitle(resolveCustomGroupName(key))
+                .setItems(actions.toArray(new String[0]), (dialog, which) -> {
+                    if (which == 0) {
+                        renameCustomGroup(key);
+                    } else if (which == 1) {
+                        resetCustomGroupName(key);
+                    }
+                })
+                .show();
+    }
+
+    /** Persists the custom group order after a drag, in the drawer or on an in-list group header. */
+    public void applyCustomGroupOrder(@NonNull List<String> orderedKeys) {
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        CustomGroupStore store = CustomGroupStore.load(context);
+        store.setGroupOrder(orderedKeys);
+        store.save();
+
+        // Apply the order right away so the list and the drawer do not wait for the background
+        // recomputation.
+        if (mCustomGroups != null) {
+            List<CustomGroupItem> reordered = new ArrayList<>(mCustomGroups.size());
+            for (String key : orderedKeys) {
+                for (CustomGroupItem item : mCustomGroups) {
+                    if (key.equals(item.key) && !reordered.contains(item)) {
+                        reordered.add(item);
+                        break;
+                    }
+                }
+            }
+            for (CustomGroupItem item : mCustomGroups) {
+                if (!reordered.contains(item)) {
+                    reordered.add(item);
+                }
+            }
+            mCustomGroups = reordered;
+        }
+        if (isCustomGroupOverview() && mList != null) {
+            rebuildCustomGroupItems(mList, true);
+        }
+        if (downloadLabelDraw != null) {
+            downloadLabelDraw.updateDownloadLabels();
+        }
+        if (mAdapter != null) {
+            mAdapter.notifyDataSetChanged();
+        }
+        refreshCustomGroups();
+    }
+
+    private static boolean isFixedCustomGroupKey(@NonNull String key) {
+        return CustomGroupOrganizer.KEY_DOUJIN.equals(key)
+                || CustomGroupOrganizer.KEY_UNKNOWN.equals(key)
+                || CustomGroupOrganizer.KEY_UNIDENTIFIED.equals(key)
+                || CustomGroupOrganizer.KEY_UNGROUPED.equals(key);
+    }
+
+    private void renameCustomGroup(@NonNull String key) {
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        EditTextDialogBuilder builder = new EditTextDialogBuilder(context,
+                resolveCustomGroupName(key), getString(R.string.custom_group_settings));
+        builder.setTitle(R.string.custom_group_rename_title);
+        builder.setPositiveButton(android.R.string.ok, null);
+        AlertDialog dialog = builder.show();
+        new CustomGroupRenameHelper(builder, dialog, key);
+    }
+
+    private void resetCustomGroupName(@NonNull String key) {
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        CustomGroupStore store = CustomGroupStore.load(context);
+        store.clearNameOverride(key);
+        store.save();
+        refreshCustomGroups();
+    }
+
+    /**
+     * Writes the full manual membership of every selected gallery. A group that is not checked is
+     * removed when the gallery was in it before, because manual galleries only use manual records.
+     */
+    private void showMoveToGroupDialog(@NonNull Context context,
+                                       @NonNull List<DownloadInfo> downloads) {
+        final List<CustomGroupItem> groups = mCustomGroups;
+        if (groups == null || groups.isEmpty()) {
+            return;
+        }
+        final int count = groups.size();
+        final CharSequence[] names = new CharSequence[count];
+        final boolean[] checked = new boolean[count];
+        for (int i = 0; i < count; i++) {
+            CustomGroupItem item = groups.get(i);
+            names[i] = item.displayName != null ? item.displayName : item.key;
+            // Pre-check only the groups every selected gallery currently belongs to.
+            boolean all = true;
+            for (DownloadInfo info : downloads) {
+                if (!item.gids.contains(info.gid)) {
+                    all = false;
+                    break;
+                }
+            }
+            checked[i] = all;
+        }
+        new AlertDialog.Builder(context)
+                .setTitle(R.string.custom_group_move_to_groups)
+                .setMultiChoiceItems(names, checked,
+                        (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setNeutralButton(R.string.custom_group_restore_auto,
+                        (dialog, which) -> restoreAutomaticGrouping(context, downloads))
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    List<String> targetKeys = new ArrayList<>();
+                    for (int i = 0; i < count; i++) {
+                        if (checked[i]) {
+                            targetKeys.add(groups.get(i).key);
+                        }
+                    }
+                    applyManualGroups(context, downloads, targetKeys);
+                })
+                .show();
+    }
+
+    private void applyManualGroups(@NonNull Context context,
+                                   @NonNull List<DownloadInfo> downloads,
+                                   @NonNull List<String> targetKeys) {
+        if (mRecyclerView != null) {
+            mRecyclerView.outOfCustomChoiceMode();
+        }
+        final Context appContext = context.getApplicationContext();
+        final List<Long> gids = new ArrayList<>(downloads.size());
+        for (DownloadInfo info : downloads) {
+            gids.add(info.gid);
+        }
+        final List<String> targets = new ArrayList<>(targetKeys);
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            for (long gid : gids) {
+                store.setManual(gid);
+                for (String key : store.getManualGroups(gid)) {
+                    if (!targets.contains(key)) {
+                        store.removeFromGroup(gid, key);
+                    }
+                }
+                for (String key : targets) {
+                    store.addToGroup(gid, key);
+                    store.recordGroupOrder(key);
+                }
+            }
+            store.save();
+            runOnUiThread(this::refreshCustomGroups);
+        });
+    }
+
+    private void restoreAutomaticGrouping(@NonNull Context context,
+                                          @NonNull List<DownloadInfo> downloads) {
+        if (mRecyclerView != null) {
+            mRecyclerView.outOfCustomChoiceMode();
+        }
+        final Context appContext = context.getApplicationContext();
+        final List<Long> gids = new ArrayList<>(downloads.size());
+        for (DownloadInfo info : downloads) {
+            gids.add(info.gid);
+        }
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            for (long gid : gids) {
+                store.clearManual(gid);
+            }
+            store.save();
+            runOnUiThread(() -> {
+                Toast.makeText(appContext,
+                        appContext.getString(R.string.custom_group_restore_auto_done, gids.size()),
+                        Toast.LENGTH_SHORT).show();
+                refreshCustomGroups();
+            });
+        });
+    }
+
+    /**
+     * Delete dialog used while a single custom group is open. Galleries that also live in another
+     * group are only moved out of the current group; only the galleries that exist in this group
+     * alone follow the regular delete flow. The dialog spells out both counts and offers a neutral
+     * action that turns everything into "move out of the group only".
+     */
+    private void showCustomGroupDeleteDialog(@NonNull Context context,
+                                             @NonNull List<DownloadInfo> downloadInfoList) {
+        final String groupKey = mCustomGroupKey;
+        if (groupKey == null) {
+            return;
+        }
+        List<DownloadInfo> sharedDownloads = new ArrayList<>();
+        List<DownloadInfo> uniqueDownloads = new ArrayList<>();
+        for (DownloadInfo info : downloadInfoList) {
+            if (belongsToOtherCustomGroup(info.gid, groupKey)) {
+                sharedDownloads.add(info);
+            } else {
+                uniqueDownloads.add(info);
+            }
+        }
+
+        String message = uniqueDownloads.isEmpty()
+                ? getString(R.string.custom_group_delete_dialog_message_shared_only,
+                sharedDownloads.size())
+                : getString(R.string.custom_group_delete_dialog_message,
+                sharedDownloads.size(), uniqueDownloads.size());
+
+        boolean containsRegularGallery = false;
+        for (DownloadInfo info : uniqueDownloads) {
+            if (!isImportedGallery(info)) {
+                containsRegularGallery = true;
+                break;
+            }
+        }
+        CheckBoxDialogBuilder builder = new CheckBoxDialogBuilder(context, message,
+                getString(R.string.download_remove_dialog_check_text),
+                Settings.getRemoveImageFiles());
+        builder.setCheckBoxVisible(containsRegularGallery);
+        CustomGroupDeleteDialogHelper helper = new CustomGroupDeleteDialogHelper(
+                sharedDownloads, uniqueDownloads, builder);
+        builder.setTitle(R.string.download_remove_dialog_title)
+                .setNeutralButton(R.string.custom_group_delete_only_move_out, helper)
+                .setPositiveButton(android.R.string.ok, helper)
+                .show();
+    }
+
+    /**
+     * Delete dialog of the custom group overview, where no single group is open. The galleries are
+     * listed under every group they belong to, so the dialog lets the user choose between leaving
+     * those groups and deleting the download itself.
+     */
+    private void showCustomGroupOverviewDeleteDialog(@NonNull Context context,
+                                                     @NonNull List<DownloadInfo> downloadInfoList) {
+        boolean containsRegularGallery = false;
+        for (DownloadInfo info : downloadInfoList) {
+            if (!isImportedGallery(info)) {
+                containsRegularGallery = true;
+                break;
+            }
+        }
+        CheckBoxDialogBuilder builder = new CheckBoxDialogBuilder(context,
+                getString(R.string.custom_group_overview_delete_dialog_message, downloadInfoList.size()),
+                getString(R.string.download_remove_dialog_check_text),
+                Settings.getRemoveImageFiles());
+        builder.setCheckBoxVisible(containsRegularGallery);
+        CustomGroupOverviewDeleteDialogHelper helper =
+                new CustomGroupOverviewDeleteDialogHelper(downloadInfoList, builder);
+        builder.setTitle(R.string.download_remove_dialog_title)
+                .setNeutralButton(R.string.custom_group_delete_only_move_out, helper)
+                .setPositiveButton(android.R.string.ok, helper)
+                .show();
+    }
+
+    /** Every group of {@code mCustomGroups} that contains the gallery, except {@code groupKey}. */
+    @NonNull
+    private List<String> otherCustomGroupKeys(long gid, @NonNull String groupKey) {
+        List<String> keys = new ArrayList<>();
+        if (mCustomGroups == null) {
+            return keys;
+        }
+        for (CustomGroupItem item : mCustomGroups) {
+            if (!groupKey.equals(item.key) && item.gids.contains(gid)) {
+                keys.add(item.key);
+            }
+        }
+        return keys;
+    }
+
+    private boolean belongsToOtherCustomGroup(long gid, @NonNull String groupKey) {
+        return !otherCustomGroupKeys(gid, groupKey).isEmpty();
+    }
+
+    /**
+     * Removes the galleries from the currently open group without deleting anything. The complete
+     * membership after the removal is written back (the other groups are re-added), and the
+     * galleries are switched to manual mode so that automatic classification cannot put them back.
+     */
+    private void moveOutOfCurrentCustomGroup(@NonNull List<DownloadInfo> downloads) {
+        moveOutOfCurrentCustomGroup(downloads, null);
+    }
+
+    /**
+     * Same as {@link #moveOutOfCurrentCustomGroup(List)}, but {@code clearedGids} are galleries that
+     * are deleted for good, so their custom group records are dropped in the same write. Both sets
+     * share one store write on purpose, otherwise the two updates could overwrite each other.
+     */
+    private void moveOutOfCurrentCustomGroup(@NonNull List<DownloadInfo> downloads,
+                                             @Nullable List<Long> clearedGids) {
+        final String groupKey = mCustomGroupKey;
+        if (groupKey == null) {
+            return;
+        }
+        final boolean moveOut = !downloads.isEmpty();
+        final boolean clearRecords = clearedGids != null && !clearedGids.isEmpty();
+        if (!moveOut && !clearRecords) {
+            return;
+        }
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        if (mRecyclerView != null) {
+            mRecyclerView.outOfCustomChoiceMode();
+        }
+
+        final List<Long> gids = new ArrayList<>(downloads.size());
+        final Map<Long, List<String>> keptGroups = new HashMap<>(downloads.size() * 2);
+        for (DownloadInfo info : downloads) {
+            gids.add(info.gid);
+            keptGroups.put(info.gid, otherCustomGroupKeys(info.gid, groupKey));
+        }
+
+        final Context appContext = context.getApplicationContext();
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            for (long gid : gids) {
+                store.setManual(gid);
+                List<String> keep = keptGroups.get(gid);
+                if (keep != null) {
+                    for (String key : keep) {
+                        store.addToGroup(gid, key);
+                        store.recordGroupOrder(key);
+                    }
+                }
+                store.removeFromGroup(gid, groupKey);
+            }
+            if (clearedGids != null) {
+                for (long gid : clearedGids) {
+                    store.clearManual(gid);
+                }
+            }
+            store.save();
+            final int count = gids.size();
+            runOnUiThread(() -> {
+                if (count > 0) {
+                    Toast.makeText(appContext,
+                            appContext.getString(R.string.custom_group_move_out_done, count),
+                            Toast.LENGTH_SHORT).show();
+                }
+                refreshCustomGroups();
+            });
+        });
+    }
+
+    /**
+     * Removes the galleries from every custom group without deleting anything. The galleries are
+     * switched to manual mode without a membership, so they end up in the "ungrouped" group and
+     * automatic classification cannot put them back.
+     */
+    private void moveOutOfCustomGroups(@NonNull List<DownloadInfo> downloads) {
+        if (downloads.isEmpty()) {
+            return;
+        }
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        if (mRecyclerView != null) {
+            mRecyclerView.outOfCustomChoiceMode();
+        }
+
+        final List<Long> gids = new ArrayList<>(downloads.size());
+        for (DownloadInfo info : downloads) {
+            gids.add(info.gid);
+        }
+
+        final Context appContext = context.getApplicationContext();
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            for (long gid : gids) {
+                store.setManual(gid);
+                for (String key : store.getManualGroups(gid)) {
+                    store.removeFromGroup(gid, key);
+                }
+            }
+            store.save();
+            final int count = gids.size();
+            runOnUiThread(() -> {
+                Toast.makeText(appContext,
+                        appContext.getString(R.string.custom_group_move_out_groups_done, count),
+                        Toast.LENGTH_SHORT).show();
+                refreshCustomGroups();
+            });
+        });
+    }
+
+    /** Drops the custom group records of galleries that are deleted for good. */
+    private void clearCustomGroupRecords(@NonNull List<Long> gids) {
+        if (gids.isEmpty()) {
+            return;
+        }
+        Context context = getEHContext();
+        if (context == null) {
+            return;
+        }
+        final List<Long> cleared = new ArrayList<>(gids);
+        final Context appContext = context.getApplicationContext();
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            for (long gid : cleared) {
+                store.clearManual(gid);
+            }
+            store.save();
+        });
+    }
+
+    private class CustomGroupRenameHelper implements View.OnClickListener {
+
+        private final EditTextDialogBuilder mBuilder;
+        private final String mKey;
+
+        CustomGroupRenameHelper(EditTextDialogBuilder builder, AlertDialog dialog, String key) {
+            mBuilder = builder;
+            mKey = key;
+            Button button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+            if (button != null) {
+                button.setOnClickListener(this);
+            }
+        }
+
+        @Override
+        public void onClick(View v) {
+            Context context = getEHContext();
+            if (null == context) {
+                return;
+            }
+            String text = mBuilder.getText();
+            if (text == null || text.trim().isEmpty()) {
+                mBuilder.setError(getString(R.string.custom_group_name_empty));
+                return;
+            }
+            mBuilder.setError(null);
+            mBuilder.dismiss(() -> {
+                CustomGroupStore store = CustomGroupStore.load(context);
+                store.setNameOverride(mKey, text.trim());
+                store.save();
+                refreshCustomGroups();
+            });
+        }
+    }
+
+    private void refreshListForCustomGroupFilter() {
+        updateForLabel();
+        if (searchKey != null && !searchKey.isEmpty()
+                && mProgressView != null && mSearchDialog != null) {
+            startSearching();
+        } else {
+            updateView();
+        }
+    }
+
+    /**
+     * Recomputes the custom groups in the background. {@link CustomGroupOrganizer#organize} reads
+     * the database and the download folder, so it must never run on the main thread.
+     *
+     * <p>The download events fire often, so a request that arrives while a recomputation is running
+     * only schedules one more run instead of starting a second scan in parallel.
+     */
+    public void refreshCustomGroups() {
+        if (!mCustomGroupMode) {
+            return;
+        }
+        DownloadManager manager = mDownloadManager;
+        Context context = getEHContext();
+        if (manager == null || context == null) {
+            return;
+        }
+        if (mCustomGroupRefreshRunning) {
+            mCustomGroupRefreshPending = true;
+            return;
+        }
+        mCustomGroupRefreshRunning = true;
+        final Context appContext = context.getApplicationContext();
+        final List<DownloadInfo> downloads = new ArrayList<>(manager.getAllDownloadInfoList());
+        final int token = ++mCustomGroupRequestToken;
+        EhApplication.getExecutorService(appContext).execute(() -> {
+            CustomGroupConfig config = CustomGroupConfig.load(appContext);
+            CustomGroupStore store = CustomGroupStore.load(appContext);
+            List<CustomGroupItem> groups =
+                    CustomGroupOrganizer.organize(downloads, config, store, appContext);
+            runOnUiThread(() -> {
+                mCustomGroupRefreshRunning = false;
+                if (token == mCustomGroupRequestToken) {
+                    mCustomGroups = groups;
+                    if (downloadLabelDraw != null) {
+                        downloadLabelDraw.updateDownloadLabels();
+                    }
+                    // The group content may have changed, re-apply it on the cached groups. This also
+                    // builds the in-list sections of the group overview.
+                    refreshListForCustomGroupFilter();
+                }
+                if (mCustomGroupRefreshPending) {
+                    mCustomGroupRefreshPending = false;
+                    refreshCustomGroups();
+                }
+            });
+        });
+    }
+
+    @Nullable
+    private List<DownloadInfo> applyCustomGroupFilter(@Nullable List<DownloadInfo> base) {
+        if (!mCustomGroupMode || mCustomGroupKey == null || base == null || mCustomGroups == null) {
+            return base;
+        }
+        Set<Long> gids = null;
+        for (CustomGroupItem item : mCustomGroups) {
+            if (mCustomGroupKey.equals(item.key)) {
+                gids = new HashSet<>(item.gids);
+                break;
+            }
+        }
+        if (gids == null) {
+            return base;
+        }
+        List<DownloadInfo> filtered = new ArrayList<>(base.size());
+        for (DownloadInfo info : base) {
+            if (gids.contains(info.gid)) {
+                filtered.add(info);
+            }
+        }
+        return filtered;
+    }
+
+    private String resolveCustomGroupName(@NonNull String key) {
+        if (mCustomGroups != null) {
+            for (CustomGroupItem item : mCustomGroups) {
+                if (key.equals(item.key) && item.displayName != null) {
+                    return item.displayName;
+                }
+            }
+        }
+        return key;
+    }
+
+    /** Refreshes the drawer entries and the list after the download data changed. */
+    private void updateDownloadLabelDraw() {
+        if (mCustomGroupMode) {
+            updateForLabel();
+            updateView();
+            refreshCustomGroups();
+        } else if (downloadLabelDraw != null) {
+            downloadLabelDraw.updateDownloadLabels();
+        }
+    }
+
     // DownloadAdapterCallback 接口实现
     @Override
     public int getIndexPage() {
@@ -1956,12 +2759,12 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public boolean isCanPagination() {
-        return canPagination && !mContinuousLabelBrowse;
+        return canPagination && !isGroupedBrowse();
     }
 
     @Override
     public int positionInList(int position) {
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             if (position < 0 || position >= mContinuousItems.size()) {
                 return -1;
             }
@@ -1976,7 +2779,7 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public int listIndexInPage(int position) {
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             if (mList == null || position < 0 || position >= mList.size()) {
                 return -1;
             }
@@ -2012,7 +2815,8 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public boolean isContinuousLabelBrowse() {
-        return mContinuousLabelBrowse;
+        // The adapter treats every sectioned list the same, custom group overview included.
+        return isGroupedBrowse();
     }
 
     @Override
@@ -2022,7 +2826,7 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public boolean isLabelHeaderPosition(int position) {
-        return mContinuousLabelBrowse && position >= 0
+        return isGroupedBrowse() && position >= 0
                 && position < mContinuousItems.size()
                 && mContinuousItems.get(position).header;
     }
@@ -2049,7 +2853,24 @@ public class DownloadsScene extends ToolbarScene
     }
 
     @Override
+    public CharSequence getLabelHeaderCollapsedAction(int position) {
+        int count = getLabelHeaderGalleryCount(position);
+        return isCustomGroupOverview()
+                ? getString(R.string.custom_group_collapsed_action, count)
+                : getString(R.string.download_label_collapsed_action, count);
+    }
+
+    @Override
     public long getDisplayItemId(int position) {
+        if (isCustomGroupOverview()) {
+            // A gallery may appear in several custom groups, so the adapter position is the only
+            // unique stable id for it. A group header is unique by its key, which keeps the dragged
+            // header identifiable while it travels over other sections.
+            if (isLabelHeaderPosition(position)) {
+                return mContinuousItems.get(position).stableId;
+            }
+            return position >= 0 ? position : RecyclerView.NO_ID;
+        }
         return position >= 0 && position < mContinuousItems.size()
                 ? mContinuousItems.get(position).stableId : RecyclerView.NO_ID;
     }
@@ -2062,13 +2883,15 @@ public class DownloadsScene extends ToolbarScene
 
     @Override
     public boolean canReorderCurrentList() {
-        return !mContinuousLabelBrowse || (TextUtils.isEmpty(searchKey)
-                && mSelectedCategory == EhUtils.ALL_CATEGORY);
+        // In the group overview a gallery can be dragged inside its own section, so the range check of
+        // the adapter keeps it from crossing into another group.
+        return !mContinuousLabelBrowse || isCustomGroupOverview()
+                || (TextUtils.isEmpty(searchKey) && mSelectedCategory == EhUtils.ALL_CATEGORY);
     }
 
     @Override
     public int getAdapterPositionForGallery(long gid) {
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             Integer position = mContinuousGalleryPositions.get(gid);
             return position != null ? position : -1;
         }
@@ -2086,6 +2909,125 @@ public class DownloadsScene extends ToolbarScene
             }
         }
         return -1;
+    }
+
+    @Override
+    public boolean canReorderCustomGroups() {
+        // Only the group overview lists every group, so only there a header can be dragged.
+        return isCustomGroupOverview();
+    }
+
+    @Override
+    public void moveCustomGroupHeaderItem(int fromPosition, int toPosition) {
+        if (!isCustomGroupOverview()
+                || fromPosition < 0 || fromPosition >= mContinuousItems.size()
+                || toPosition < 0 || toPosition >= mContinuousItems.size()
+                || fromPosition == toPosition) {
+            return;
+        }
+        ContinuousDownloadItem item = mContinuousItems.remove(fromPosition);
+        mContinuousItems.add(toPosition, item);
+        rebuildContinuousPositionMaps();
+    }
+
+    @Override
+    public void commitCustomGroupOrder() {
+        if (!isCustomGroupOverview()) {
+            return;
+        }
+        // The header sequence of the dragged list is the new group order.
+        List<String> keys = new ArrayList<>();
+        for (ContinuousDownloadItem item : mContinuousItems) {
+            if (item.header && item.label != null && !keys.contains(item.label)) {
+                keys.add(item.label);
+            }
+        }
+        if (!keys.isEmpty()) {
+            applyCustomGroupOrder(keys);
+        }
+    }
+
+    @Override
+    public void moveCustomGroupGalleryItem(int fromPosition, int toPosition) {
+        if (!isCustomGroupOverview()
+                || fromPosition < 0 || fromPosition >= mContinuousItems.size()
+                || toPosition < 0 || toPosition >= mContinuousItems.size()
+                || fromPosition == toPosition) {
+            return;
+        }
+        String key = customGroupKeyAt(fromPosition);
+        if (key != null) {
+            mDraggedCustomGroupKey = key;
+        }
+        ContinuousDownloadItem item = mContinuousItems.remove(fromPosition);
+        mContinuousItems.add(toPosition, item);
+        rebuildContinuousPositionMaps();
+    }
+
+    @Override
+    public void commitCustomGroupMemberOrder() {
+        final String key = mDraggedCustomGroupKey;
+        mDraggedCustomGroupKey = null;
+        Context context = getEHContext();
+        if (!isCustomGroupOverview() || key == null || context == null) {
+            return;
+        }
+        // The dragged section now holds its galleries in the order the user left them in.
+        List<Long> gids = new ArrayList<>();
+        boolean inSection = false;
+        for (ContinuousDownloadItem item : mContinuousItems) {
+            if (item.header) {
+                inSection = key.equals(item.label);
+            } else if (inSection && item.downloadInfo != null) {
+                gids.add(item.downloadInfo.gid);
+            }
+        }
+        if (gids.isEmpty()) {
+            return;
+        }
+        CustomGroupStore store = CustomGroupStore.load(context);
+        store.setMemberOrder(key, gids);
+        store.save();
+        refreshCustomGroups();
+    }
+
+    @Override
+    public void restoreCustomGroupItems() {
+        mDraggedCustomGroupKey = null;
+        if (isCustomGroupOverview() && mList != null) {
+            // Drop the in-list move of the aborted drag by rebuilding from the persisted order.
+            rebuildCustomGroupItems(mList, true);
+            if (mAdapter != null) {
+                mAdapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    /** The custom group of the section that contains the adapter position, or null. */
+    @Nullable
+    private String customGroupKeyAt(int position) {
+        if (position < 0 || position >= mContinuousItems.size()) {
+            return null;
+        }
+        int index = position;
+        while (index >= 0 && !mContinuousItems.get(index).header) {
+            index--;
+        }
+        return index >= 0 ? mContinuousItems.get(index).label : null;
+    }
+
+    /** Recomputes the position maps after the sectioned list was reordered in place. */
+    private void rebuildContinuousPositionMaps() {
+        mContinuousGalleryPositions.clear();
+        mContinuousHeaderPositions.clear();
+        for (int i = 0; i < mContinuousItems.size(); i++) {
+            ContinuousDownloadItem item = mContinuousItems.get(i);
+            if (item.header) {
+                mContinuousHeaderPositions.put(item.label, i);
+            } else if (item.downloadInfo != null) {
+                mContinuousGalleryPositions.put(item.downloadInfo.gid, i);
+            }
+        }
     }
 
     boolean scrollToDownloadLabel(@Nullable String label) {
@@ -2256,10 +3198,12 @@ public class DownloadsScene extends ToolbarScene
         if (!isAdded()) {
             return;
         }
+        boolean includeEmptySections = TextUtils.isEmpty(searchKey)
+                && mSelectedCategory == EhUtils.ALL_CATEGORY;
         if (mContinuousLabelBrowse && mList != null) {
-            boolean includeEmptyLabels = TextUtils.isEmpty(searchKey)
-                    && mSelectedCategory == EhUtils.ALL_CATEGORY;
-            rebuildContinuousItems(mList, includeEmptyLabels);
+            rebuildContinuousItems(mList, includeEmptySections);
+        } else if (isCustomGroupOverview() && mList != null) {
+            rebuildCustomGroupItems(mList, includeEmptySections);
         }
         if (mOriginalAdapter != null) {
             mOriginalAdapter.notifyDataSetChanged();
@@ -2426,7 +3370,7 @@ public class DownloadsScene extends ToolbarScene
     }
 
     private void trimSpiderInfoMapToCurrentPage() {
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             return;
         }
         List<DownloadInfo> pageList = getCurrentPageList();
@@ -2442,7 +3386,7 @@ public class DownloadsScene extends ToolbarScene
         if (mList == null) {
             return;
         }
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             List<DownloadInfo> initialWindow = new ArrayList<>(100);
             for (ContinuousDownloadItem item : mContinuousItems) {
                 if (!item.header && item.downloadInfo != null) {
@@ -2468,7 +3412,7 @@ public class DownloadsScene extends ToolbarScene
     }
 
     private void queryVisibleSpiderInfo() {
-        if (!mContinuousLabelBrowse || mLayoutManager == null
+        if (!isGroupedBrowse() || mLayoutManager == null
                 || mList == null || mList.isEmpty()) {
             return;
         }
@@ -2572,9 +3516,7 @@ public class DownloadsScene extends ToolbarScene
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void updateDownloadLabels(SomethingNeedRefresh somethingNeedRefresh) {
         if (somethingNeedRefresh.isDownloadLabelDrawNeed()) {
-            if (downloadLabelDraw != null) {
-                downloadLabelDraw.updateDownloadLabels();
-            }
+            updateDownloadLabelDraw();
             if (mContinuousLabelBrowse) {
                 refreshContinuousStructure();
             }
@@ -2584,7 +3526,7 @@ public class DownloadsScene extends ToolbarScene
 
     @SuppressLint("NotifyDataSetChanged")
     private void initPage(int position) {
-        if (mContinuousLabelBrowse) {
+        if (isGroupedBrowse()) {
             int adapterPosition = listIndexInPage(position);
             if (mRecyclerView != null && adapterPosition >= 0) {
                 mRecyclerView.scrollToPosition(adapterPosition);
@@ -3104,6 +4046,130 @@ public class DownloadsScene extends ToolbarScene
         }
     }
 
+    private class CustomGroupDeleteDialogHelper implements DialogInterface.OnClickListener {
+
+        private final List<DownloadInfo> mSharedDownloads;
+        private final List<DownloadInfo> mUniqueDownloads;
+        private final CheckBoxDialogBuilder mBuilder;
+
+        CustomGroupDeleteDialogHelper(List<DownloadInfo> sharedDownloads,
+                                      List<DownloadInfo> uniqueDownloads,
+                                      CheckBoxDialogBuilder builder) {
+            mSharedDownloads = sharedDownloads;
+            mUniqueDownloads = uniqueDownloads;
+            mBuilder = builder;
+        }
+
+        @Override
+        public void onClick(DialogInterface dialog, int which) {
+            if (which == DialogInterface.BUTTON_NEUTRAL) {
+                // Everything leaves the group, nothing is deleted.
+                List<DownloadInfo> all = new ArrayList<>(
+                        mSharedDownloads.size() + mUniqueDownloads.size());
+                all.addAll(mSharedDownloads);
+                all.addAll(mUniqueDownloads);
+                moveOutOfCurrentCustomGroup(all);
+                return;
+            }
+            if (which != DialogInterface.BUTTON_POSITIVE) {
+                return;
+            }
+
+            if (mRecyclerView != null) {
+                mRecyclerView.outOfCustomChoiceMode();
+            }
+
+            boolean containsRegularGallery = false;
+            for (DownloadInfo info : mUniqueDownloads) {
+                if (!isImportedGallery(info)) {
+                    containsRegularGallery = true;
+                    break;
+                }
+            }
+            boolean checked = containsRegularGallery && mBuilder.isChecked();
+            if (containsRegularGallery) {
+                Settings.putRemoveImageFiles(checked);
+            }
+
+            if (!mUniqueDownloads.isEmpty() && null != mDownloadManager) {
+                LongList gidList = new LongList();
+                List<Long> deletedGids = new ArrayList<>(mUniqueDownloads.size());
+                for (DownloadInfo info : mUniqueDownloads) {
+                    gidList.add(info.gid);
+                    deletedGids.add(info.gid);
+                }
+                mDownloadManager.deleteRangeDownload(gidList);
+                if (checked) {
+                    deleteGalleryFilesAsync(mUniqueDownloads);
+                }
+                // Drop the custom group records of the galleries that are gone for good.
+                moveOutOfCurrentCustomGroup(mSharedDownloads, deletedGids);
+            } else if (!mSharedDownloads.isEmpty()) {
+                moveOutOfCurrentCustomGroup(mSharedDownloads);
+            }
+        }
+    }
+
+    /**
+     * Handles the delete dialog of the custom group overview: the neutral action only moves the
+     * galleries out of their groups, the positive one deletes the downloads.
+     */
+    private class CustomGroupOverviewDeleteDialogHelper implements DialogInterface.OnClickListener {
+
+        private final List<DownloadInfo> mDownloads;
+        private final CheckBoxDialogBuilder mBuilder;
+
+        CustomGroupOverviewDeleteDialogHelper(List<DownloadInfo> downloads,
+                                              CheckBoxDialogBuilder builder) {
+            mDownloads = downloads;
+            mBuilder = builder;
+        }
+
+        @Override
+        public void onClick(DialogInterface dialog, int which) {
+            if (which == DialogInterface.BUTTON_NEUTRAL) {
+                // Nothing is deleted, the galleries only leave the groups they are in.
+                moveOutOfCustomGroups(mDownloads);
+                return;
+            }
+            if (which != DialogInterface.BUTTON_POSITIVE) {
+                return;
+            }
+
+            if (mRecyclerView != null) {
+                mRecyclerView.outOfCustomChoiceMode();
+            }
+
+            boolean containsRegularGallery = false;
+            for (DownloadInfo info : mDownloads) {
+                if (!isImportedGallery(info)) {
+                    containsRegularGallery = true;
+                    break;
+                }
+            }
+            boolean checked = containsRegularGallery && mBuilder.isChecked();
+            if (containsRegularGallery) {
+                Settings.putRemoveImageFiles(checked);
+            }
+
+            if (null == mDownloadManager) {
+                return;
+            }
+            LongList gidList = new LongList();
+            List<Long> deletedGids = new ArrayList<>(mDownloads.size());
+            for (DownloadInfo info : mDownloads) {
+                gidList.add(info.gid);
+                deletedGids.add(info.gid);
+            }
+            mDownloadManager.deleteRangeDownload(gidList);
+            if (checked) {
+                deleteGalleryFilesAsync(mDownloads);
+            }
+            // Drop the custom group records of the galleries that are gone for good.
+            clearCustomGroupRecords(deletedGids);
+        }
+    }
+
     private class MoveDialogHelper implements DialogInterface.OnClickListener {
 
         private final String[] mLabels;
@@ -3213,6 +4279,8 @@ public class DownloadsScene extends ToolbarScene
         }
         if (mContinuousLabelBrowse) {
             rebuildContinuousItems(mList, false);
+        } else if (isCustomGroupOverview()) {
+            rebuildCustomGroupItems(mList, false);
         }
         if (mAdapter != null) {
             mAdapter.notifyDataSetChanged();

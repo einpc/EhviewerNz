@@ -3,6 +3,8 @@ package com.hippo.ehviewer.ui.scene.topList
 import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,27 +12,30 @@ import android.widget.AdapterView
 import android.widget.FrameLayout
 import android.widget.Spinner
 import androidx.annotation.IntDef
-import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.hippo.ehviewer.EhApplication
 import com.hippo.ehviewer.R
+import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhClient
+import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhRequest
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.EhTopListDetail
+import com.hippo.ehviewer.client.data.GalleryInfo
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.data.topList.TopListInfo
 import com.hippo.ehviewer.client.data.topList.TopListItem
 import com.hippo.ehviewer.client.exception.EhException
 import com.hippo.ehviewer.ui.scene.BaseScene
 import com.hippo.ehviewer.ui.scene.EhCallback
-import com.hippo.ehviewer.ui.scene.ProgressScene
 import com.hippo.ehviewer.ui.scene.gallery.detail.GalleryDetailScene
 import com.hippo.ehviewer.ui.scene.gallery.list.GalleryListScene
 import com.hippo.ehviewer.util.ClipboardUtil.createAnnouncerFromClipboardUrl
 import com.hippo.scene.Announcer
 import com.hippo.scene.SceneFragment
 import com.hippo.view.ViewTransition
+import com.hippo.widget.recyclerview.AutoStaggeredGridLayoutManager
 import java.util.Random
 
 private const val STATE_INIT = -1
@@ -40,6 +45,7 @@ private const val STATE_REFRESH_HEADER = 2
 private const val STATE_FAILED = 3
 private const val BACK_PRESSED_INTERVAL = 2000
 private const val TRANSITION_ANIMATION_DISABLED = true
+private const val GALLERY_TOP_LIST_INDEX = 0
 
 private var mPosition = 0
 
@@ -60,6 +66,12 @@ class EhTopListScene : BaseScene() {
     private var client: EhClient? = null
     private var request: EhRequest? = null
     private var hasFirstRefresh = false
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 画廊排行榜每个时间段（昨日/本月/今年/全部）对应的画廊，元素可能为 null。 */
+    private var galleryPeriods: List<List<GalleryInfo?>>? = null
+    private var galleryThumbsRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,7 +95,13 @@ class EhTopListScene : BaseScene() {
         viewTransition = ViewTransition(transitionView, frameLayout)
 
         recyclerView = view.findViewById(R.id.top_list_recycler_view)
-        recyclerView?.layoutManager = LinearLayoutManager(ehContext)
+        val context = ehContext
+        val columnSize = context?.resources
+            ?.getDimensionPixelOffset(Settings.getThumbSizeResId()) ?: 0
+        val layoutManager = AutoStaggeredGridLayoutManager(
+            columnSize, StaggeredGridLayoutManager.VERTICAL)
+        layoutManager.setStrategy(AutoStaggeredGridLayoutManager.STRATEGY_SUITABLE_SIZE)
+        recyclerView?.layoutManager = layoutManager
 
         if (!hasFirstRefresh) {
             hasFirstRefresh = true
@@ -102,6 +120,7 @@ class EhTopListScene : BaseScene() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        mainHandler.removeCallbacksAndMessages(null)
         viewTransition = null
     }
 
@@ -157,16 +176,83 @@ class EhTopListScene : BaseScene() {
 
     private fun onGetEhTopListDetailSuccess(detail: EhTopListDetail, index: Int) {
         ehTopListDetail = detail
+        if (galleryPeriods == null) {
+            galleryPeriods = buildGalleryPeriods(detail.get(GALLERY_TOP_LIST_INDEX))
+        }
         bindViewSecond(index)
         adjustViewVisibility(STATE_NORMAL, true)
+        requestGalleryThumbs()
+    }
+
+    private fun buildGalleryPeriods(info: TopListInfo?): List<List<GalleryInfo?>> {
+        if (info == null) {
+            return emptyList()
+        }
+        val periods = ArrayList<List<GalleryInfo?>>(info.size())
+        for (period in 0 until info.size()) {
+            val array = info.get(period)
+            if (array == null) {
+                periods.add(emptyList())
+                continue
+            }
+            val galleries = ArrayList<GalleryInfo?>(array.length())
+            for (i in 0 until array.length()) {
+                val item = array.get(i)
+                val gid = item?.gid?.toLongOrNull()
+                if (item == null || gid == null || item.token.isNullOrEmpty()) {
+                    galleries.add(null)
+                    continue
+                }
+                galleries.add(GalleryInfo().apply {
+                    this.gid = gid
+                    token = item.token
+                    title = item.value
+                })
+            }
+            periods.add(galleries)
+        }
+        return periods
+    }
+
+    /**
+     * 排行榜页面本身不含封面，需要用 api.php 批量补全缩略图信息（每 25 个画廊一次请求）。
+     */
+    private fun requestGalleryThumbs() {
+        if (galleryThumbsRequested) {
+            return
+        }
+        val context = ehContext ?: return
+        val periods = galleryPeriods ?: return
+        val galleries = periods.flatten().filterNotNull()
+        if (galleries.isEmpty()) {
+            return
+        }
+        galleryThumbsRequested = true
+        val okHttpClient = EhApplication.getOkHttpClient(context)
+        val executor = EhApplication.getExecutorService(context)
+        val referer = EhUrl.getTopListUrl()
+        executor.execute {
+            try {
+                EhEngine.fillGalleryListByApi(null, okHttpClient, galleries, referer)
+            } catch (e: Throwable) {
+                // 封面获取失败时保留占位卡片
+            }
+            mainHandler.post {
+                val rv = recyclerView ?: return@post
+                val adapter = rv.adapter
+                if (adapter is EhTopListAdapter) {
+                    adapter.notifyDataSetChanged()
+                }
+            }
+        }
     }
 
     private fun bindViewSecond(index: Int) {
         val detail = ehTopListDetail ?: return
         val rv = recyclerView ?: return
         val context = ehContext ?: return
-        val adapter = EhTopListAdapterView(context, rv, detail[index], this, index)
-        rv.adapter = adapter
+        val periods = if (index == GALLERY_TOP_LIST_INDEX) galleryPeriods else null
+        rv.adapter = EhTopListAdapterView(context, detail.get(index), this, index, periods)
     }
 
     private fun adjustViewVisibility(@State newState: Int, animation: Boolean) {
@@ -200,11 +286,11 @@ class EhTopListScene : BaseScene() {
 
     private inner class EhTopListAdapterView(
         context: Context,
-        recyclerView: RecyclerView,
         topListInfo: TopListInfo,
         private val sceneFragment: SceneFragment,
         searchType: Int,
-    ) : EhTopListAdapter(context, topListInfo, searchType) {
+        galleryPeriods: List<List<GalleryInfo?>>?,
+    ) : EhTopListAdapter(context, topListInfo, searchType, galleryPeriods) {
 
         private val hashMap = HashMap<Int, Int>()
 
@@ -232,10 +318,12 @@ class EhTopListScene : BaseScene() {
             }
 
             if (!topListItem.gid.isNullOrEmpty() && !topListItem.token.isNullOrEmpty()) {
+                // The toplist link already carries the gallery token, so the detail can be opened
+                // without resolving it first.
                 val args = Bundle()
-                args.putString(ProgressScene.KEY_ACTION, ProgressScene.ACTION_GALLERY_TOKEN)
-                args.putLong(ProgressScene.KEY_GID, topListItem.gid.toLong())
-                args.putString(ProgressScene.KEY_PTOKEN, topListItem.tag)
+                args.putString(GalleryDetailScene.KEY_ACTION, GalleryDetailScene.ACTION_GID_TOKEN)
+                args.putLong(GalleryDetailScene.KEY_GID, topListItem.gid.toLong())
+                args.putString(GalleryDetailScene.KEY_TOKEN, topListItem.token)
                 val announcer = Announcer(GalleryDetailScene::class.java).setArgs(args)
                 startScene(announcer)
                 return

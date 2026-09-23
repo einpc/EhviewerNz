@@ -27,6 +27,7 @@ import com.hippo.ehviewer.client.EhUrl;
 import com.hippo.ehviewer.client.data.GalleryDetail;
 import com.hippo.ehviewer.client.data.GalleryDetailMetadata;
 import com.hippo.ehviewer.client.data.GalleryInfo;
+import com.hippo.ehviewer.dao.DownloadInfo;
 import com.hippo.ehviewer.spider.SpiderDen;
 import com.hippo.util.IoThreadPoolExecutor;
 
@@ -37,10 +38,12 @@ import com.hippo.util.IoThreadPoolExecutor;
  */
 public final class GalleryDetailMetadataTask {
 
+    private final Context application;
     private final GalleryInfo gallery;
     private final EhClient client;
 
     public GalleryDetailMetadataTask(@NonNull Context context, @NonNull GalleryInfo gallery) {
+        application = context.getApplicationContext();
         this.gallery = gallery;
         client = EhApplication.getEhClient(context);
     }
@@ -69,9 +72,15 @@ public final class GalleryDetailMetadataTask {
     }
 
     private void save(@NonNull GalleryDetail detail) {
+        // The tags may have just been stored, so the cached tag set of the gallery is stale. The
+        // download info is looked up here because the write itself must not run on the main thread.
+        final DownloadInfo info = EhApplication.getDownloadManager(application)
+                .getDownloadInfo(gallery.gid);
         // Callbacks run on the main thread, resolving the download folder and writing must not
-        IoThreadPoolExecutor.Companion.getInstance().execute(() ->
-                GalleryDetailMetadata.writeIfChanged(
-                        detail, SpiderDen.getExistingGalleryDownloadDir(gallery)));
+        IoThreadPoolExecutor.Companion.getInstance().execute(() -> {
+            GalleryDetailMetadata.writeIfChanged(
+                    detail, SpiderDen.getExistingGalleryDownloadDir(gallery));
+            DownloadTags.invalidate(info);
+        });
     }
 }

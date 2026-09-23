@@ -26,6 +26,8 @@ public class TopListParser {
 
     private static final Pattern PATTERN_ERROR = Pattern.compile("<div class=\"d\">\n<p>([^<]+)</p>");
 
+    private static final Pattern PATTERN_GALLERY_HREF = Pattern.compile("/g/(\\d+)/([0-9a-f]+)");
+
 
     public static EhTopListDetail parse(String body) throws EhException {
 
@@ -86,6 +88,11 @@ public class TopListParser {
             TopListItem topListItem = new TopListItem();
             topListItem.value = element.text();
             topListItem.href = element.attr("href");
+            Matcher hrefMatcher = PATTERN_GALLERY_HREF.matcher(topListItem.href);
+            if (hrefMatcher.find()) {
+                topListItem.gid = hrefMatcher.group(1);
+                topListItem.token = hrefMatcher.group(2);
+            }
             topListItems[i] = topListItem;
         }
         topListItemArray.itemArray = topListItems;

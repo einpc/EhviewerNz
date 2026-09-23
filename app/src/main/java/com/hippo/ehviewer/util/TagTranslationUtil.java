@@ -82,5 +82,20 @@ public class TagTranslationUtil {
         return getTagCN(tag.split(":"),ehTags);
     }
 
+    /**
+     * Body translation of a full {@code namespace:value} tag, without the namespace prefix. Returns
+     * null when the tag carries no namespace, so a caller can fall back to the raw value.
+     */
+    public static String getTagCNBody(String tag, EhTagDatabase ehTags) {
+        if (tag == null) {
+            return null;
+        }
+        int index = tag.indexOf(':');
+        if (index <= 0 || index == tag.length() - 1) {
+            return null;
+        }
+        return getTagCNBody(new String[]{tag.substring(0, index), tag.substring(index + 1)}, ehTags);
+    }
+
 
 }

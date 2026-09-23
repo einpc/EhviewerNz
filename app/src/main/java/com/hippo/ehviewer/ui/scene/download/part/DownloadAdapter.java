@@ -31,6 +31,7 @@ import android.util.LruCache;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -103,6 +104,8 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final DownloadAdapterCallback mCallback;
 
     private View movedItem = null;
+    /** True while a group header is dragged, which reorders the custom groups. */
+    private boolean mDraggingCustomGroupHeader;
 
     private static final LruCache<String, Bitmap> ARCHIVE_THUMBNAIL_CACHE =
             new LruCache<String, Bitmap>(16 * 1024 * 1024) {
@@ -135,6 +138,7 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         String getLabelHeaderTitle(int position);
         int getLabelHeaderGalleryCount(int position);
         boolean isLabelHeaderCollapsed(int position);
+        CharSequence getLabelHeaderCollapsedAction(int position);
         void onLabelHeaderClick(int position);
         boolean onLabelHeaderLongClick(int position);
         void onCollapsedLabelClick(int position);
@@ -142,6 +146,18 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         void onGroupedDownloadOrderChanged();
         boolean canReorderCurrentList();
         int getAdapterPositionForGallery(long gid);
+        /** Whether the in-list group headers can be dragged to reorder the custom groups. */
+        boolean canReorderCustomGroups();
+        /** Moves the dragged group header to the target adapter position. */
+        void moveCustomGroupHeaderItem(int fromPosition, int toPosition);
+        /** Persists the custom group order after a header drag. */
+        void commitCustomGroupOrder();
+        /** Moves a gallery inside its custom group section. */
+        void moveCustomGroupGalleryItem(int fromPosition, int toPosition);
+        /** Persists the member order of every custom group after a gallery drag. */
+        void commitCustomGroupMemberOrder();
+        /** Discards the in-list move of an aborted drag. */
+        void restoreCustomGroupItems();
     }
 
     public DownloadAdapter(DownloadsScene scene, DownloadAdapterCallback callback) {
@@ -223,10 +239,11 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             boolean collapsed = mCallback.isLabelHeaderCollapsed(position);
             holder.collapsedAction.setVisibility(collapsed ? View.VISIBLE : View.GONE);
             if (collapsed) {
-                holder.collapsedAction.setText(mScene.getString(
-                        R.string.download_label_collapsed_action,
-                        mCallback.getLabelHeaderGalleryCount(position)));
+                holder.collapsedAction.setText(
+                        mCallback.getLabelHeaderCollapsedAction(position));
             }
+            holder.dragHandler.setVisibility(
+                    mCallback.canReorderCustomGroups() ? View.VISIBLE : View.GONE);
             return;
         }
         DownloadHolder holder = (DownloadHolder) rawHolder;
@@ -433,6 +450,14 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public boolean onCheckCanStartDrag(@NonNull RecyclerView.ViewHolder rawHolder,
             int position, int x, int y) {
+        if (rawHolder instanceof LabelHeaderHolder) {
+            // A group header is reordered by its drag handle, the same way a gallery is dragged by
+            // its thumbnail. Restricting the drag to the handle keeps a swipe on the header scrolling
+            // the list instead of reordering the groups.
+            LabelHeaderHolder holder = (LabelHeaderHolder) rawHolder;
+            return mCallback.canReorderCustomGroups()
+                    && ViewUtils.isViewUnder(holder.dragHandler, x, y, 0);
+        }
         if (!DRAG_ENABLE || !mCallback.canReorderCurrentList()
                 || !(rawHolder instanceof DownloadHolder)){
             return false;
@@ -445,6 +470,11 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public ItemDraggableRange onGetItemDraggableRange(
             RecyclerView.ViewHolder holder, int position) {
+        if (holder instanceof LabelHeaderHolder) {
+            // A header may travel over the whole list; the sections become contiguous again when the
+            // drag is committed.
+            return null;
+        }
         if (mCallback.isContinuousLabelBrowse()) {
             int start = position;
             int end = position;
@@ -464,6 +494,15 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public void onMoveItem(int fromPosition, int toPosition) {
         if (fromPosition == toPosition) {
+            return;
+        }
+        if (mDraggingCustomGroupHeader) {
+            mCallback.moveCustomGroupHeaderItem(fromPosition, toPosition);
+            return;
+        }
+        if (mCallback.canReorderCustomGroups()) {
+            // A gallery is dragged inside its own section, so the group member order is what changes.
+            mCallback.moveCustomGroupGalleryItem(fromPosition, toPosition);
             return;
         }
         if (mCallback.isContinuousLabelBrowse()) {
@@ -555,6 +594,7 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public void onItemDragStarted(int position) {
         // 拖拽开始时的处理
+        mDraggingCustomGroupHeader = mCallback.isLabelHeaderPosition(position);
         try {
             // 设置RecyclerView为软件渲染模式以避免硬件位图问题
             if (mCallback.getRecyclerView() != null) {
@@ -571,6 +611,20 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public void onItemDragFinished(int fromPosition, int toPosition, boolean result) {
         // 拖拽结束时的处理
+        if (mDraggingCustomGroupHeader) {
+            mDraggingCustomGroupHeader = false;
+            if (result) {
+                mCallback.commitCustomGroupOrder();
+            } else {
+                mCallback.restoreCustomGroupItems();
+            }
+        } else if (mCallback.canReorderCustomGroups()) {
+            if (result) {
+                mCallback.commitCustomGroupMemberOrder();
+            } else {
+                mCallback.restoreCustomGroupItems();
+            }
+        }
         try {
             // 恢复RecyclerView为硬件加速模式
             RecyclerView recyclerView = mCallback.getRecyclerView();
@@ -905,6 +959,7 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         final TextView count;
         final View headerContent;
         final TextView collapsedAction;
+        final ImageView dragHandler;
 
         LabelHeaderHolder(@NonNull View itemView) {
             super(itemView);
@@ -912,6 +967,7 @@ public class DownloadAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             count = itemView.findViewById(R.id.count);
             headerContent = itemView.findViewById(R.id.header_content);
             collapsedAction = itemView.findViewById(R.id.collapsed_action);
+            dragHandler = itemView.findViewById(R.id.drag_handler);
             headerContent.setOnClickListener(view -> {
                 int position = getBindingAdapterPosition();
                 if (position != RecyclerView.NO_POSITION) {

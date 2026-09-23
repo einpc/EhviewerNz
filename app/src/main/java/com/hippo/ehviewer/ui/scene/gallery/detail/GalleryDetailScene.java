@@ -106,6 +106,8 @@ import com.hippo.ehviewer.client.parser.RateGalleryParser;
 import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser;
 import com.hippo.ehviewer.dao.DownloadInfo;
 import com.hippo.ehviewer.dao.Filter;
+import com.hippo.ehviewer.download.CustomGroupConfig;
+import com.hippo.ehviewer.download.CustomGroupDimension;
 import com.hippo.ehviewer.download.DownloadManager;
 import com.hippo.ehviewer.download.GalleryUpdateManager;
 import com.hippo.ehviewer.download.GalleryVersionMetadataTask;
@@ -2107,6 +2109,48 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
                 }).show();
     }
 
+    /** Long press menu of the uploader: block it, or turn it into a custom group of the download page. */
+    private void showUploaderDialog() {
+        Context context = getEHContext();
+        String uploader = getUploader();
+        if (context == null || TextUtils.isEmpty(uploader)) {
+            return;
+        }
+
+        new AlertDialog.Builder(context)
+                .setTitle(uploader)
+                .setItems(R.array.uploader_menu_entries, (dialog, which) -> {
+                    if (which == 0) {
+                        showFilterUploaderDialog();
+                    } else if (which == 1) {
+                        addUploaderGroupDimension(uploader);
+                    }
+                }).show();
+    }
+
+    /**
+     * Adds the uploader as a custom group dimension, so the downloads of this uploader land in their
+     * own group of the download page.
+     */
+    private void addUploaderGroupDimension(String uploader) {
+        Context context = getEHContext();
+        if (context == null || TextUtils.isEmpty(uploader)) {
+            return;
+        }
+
+        CustomGroupConfig config = CustomGroupConfig.load(context);
+        if (!config.addDimension(CustomGroupDimension.match(
+                CustomGroupConfig.uploaderTag(uploader), null, true))) {
+            Toast.makeText(context, R.string.custom_group_add_dimension_duplicate,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        config.save();
+        Toast.makeText(context,
+                context.getString(R.string.custom_group_add_tag_dimension_done, uploader),
+                Toast.LENGTH_SHORT).show();
+    }
+
     private void showFilterTagDialog(String tag) {
         Context context = getEHContext();
         if (context == null) {
@@ -2154,7 +2198,7 @@ public class GalleryDetailScene extends BaseScene implements View.OnClickListene
         }
 
         if (mUploader == v) {
-            showFilterUploaderDialog();
+            showUploaderDialog();
         } else if (mArtist == v) {
             showTitleKeywordSearchDialog();
             return true;

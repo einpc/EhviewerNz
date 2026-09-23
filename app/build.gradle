@@ -9,7 +9,7 @@ if (file('google-services.json').exists()) {
 }
 
 
-def baseVersionName = "2.0.2.4.1"
+def baseVersionName = "2.0.2.4.7"
 
 
 def releaseKeystoreFile = rootProject.file("ehviewernz.jks")
@@ -55,7 +55,7 @@ android {
         minSdkVersion 23
         //noinspection ExpiredTargetSdkVersion
         targetSdkVersion 30
-        versionCode 111
+        versionCode 117
         versionName batchVersionSuffix ? "${baseVersionName}.${batchVersionSuffix}" : baseVersionName
         manifestPlaceholders = [appLabel: "@string/app_name"]
         vectorDrawables.useSupportLibrary = true

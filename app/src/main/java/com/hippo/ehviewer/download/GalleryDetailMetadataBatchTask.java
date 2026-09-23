@@ -125,6 +125,8 @@ public final class GalleryDetailMetadataBatchTask
                     GalleryDetail detail = EhEngine.getGalleryDetail(null, okHttpClient,
                             EhUrl.getGalleryDetailUrl(info.gid, info.token));
                     GalleryDetailMetadata.writeIfChanged(detail, dir);
+                    // The stored tags changed, so the cached tag set of the gallery is stale.
+                    DownloadTags.invalidate(info);
                     updated++;
                 } catch (Throwable e) {
                     ExceptionUtils.throwIfFatal(e);

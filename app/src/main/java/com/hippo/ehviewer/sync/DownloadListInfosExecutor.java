@@ -6,21 +6,19 @@ import android.os.Looper;
 
 import androidx.annotation.Nullable;
 
-import com.hippo.ehviewer.EhDB;
 import com.hippo.ehviewer.R;
 import com.hippo.ehviewer.callBack.DownloadSearchCallback;
 import com.hippo.ehviewer.client.EhConfig;
 import com.hippo.ehviewer.client.EhUtils;
 import com.hippo.ehviewer.dao.DownloadInfo;
-import com.hippo.ehviewer.dao.GalleryTags;
 import com.hippo.ehviewer.download.DownloadManager;
+import com.hippo.ehviewer.download.DownloadTags;
 import com.hippo.ehviewer.spider.SpiderDen;
 import com.hippo.unifile.UniFile;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -404,14 +402,7 @@ public class DownloadListInfosExecutor {
         }
 
         for (String searchTag : searchTags) {
-            boolean matched = false;
-            for (String tag : searchableTags) {
-                if (matchSingleTag(tag, searchTag)) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
+            if (!DownloadTags.containsTag(searchableTags, searchTag)) {
                 return false;
             }
         }
@@ -420,28 +411,7 @@ public class DownloadListInfosExecutor {
     }
 
     private ArrayList<String> getSearchableTags(DownloadInfo info) {
-        if (info.tgList != null && !info.tgList.isEmpty()) {
-            return info.tgList;
-        }
-
-        ArrayList<String> tagList = new ArrayList<>();
-        if (info.simpleTags != null) {
-            for (String tag : info.simpleTags) {
-                if (tag != null && !tag.isEmpty()) {
-                    tagList.add(tag);
-                }
-            }
-        }
-
-        if (tagList.isEmpty()) {
-            ArrayList<String> dbTags = searchTagList(info.gid);
-            if (dbTags != null && !dbTags.isEmpty()) {
-                tagList.addAll(dbTags);
-            }
-        }
-
-        info.tgList = tagList;
-        return tagList;
+        return DownloadTags.resolve(info);
     }
 
     private static String[] splitSearchTags(String searchKey) {
@@ -462,87 +432,6 @@ public class DownloadListInfosExecutor {
             }
         }
         return tags.toArray(new String[0]);
-    }
-
-    private static boolean matchSingleTag(String tag, String searchTag) {
-        if (tag == null || searchTag == null) {
-            return false;
-        }
-
-        String normalizedTag = tag.trim().toLowerCase(Locale.ROOT);
-        String normalizedSearchTag = searchTag.trim().toLowerCase(Locale.ROOT);
-        if (normalizedTag.isEmpty() || normalizedSearchTag.isEmpty()) {
-            return false;
-        }
-
-        int tagIndex = normalizedTag.indexOf(':');
-        String tagNamespace = tagIndex >= 0 ? normalizedTag.substring(0, tagIndex) : null;
-        String tagName = tagIndex >= 0 ? normalizedTag.substring(tagIndex + 1) : normalizedTag;
-
-        int searchTagIndex = normalizedSearchTag.indexOf(':');
-        String searchNamespace = searchTagIndex >= 0 ? normalizedSearchTag.substring(0, searchTagIndex) : null;
-        String searchName = searchTagIndex >= 0 ? normalizedSearchTag.substring(searchTagIndex + 1) : normalizedSearchTag;
-
-        if (searchNamespace != null && (tagNamespace == null || !tagNamespace.equals(searchNamespace))) {
-            return false;
-        }
-
-        if (searchName.isEmpty()) {
-            return false;
-        }
-
-        if (tagName.equals(searchName)) {
-            return true;
-        }
-
-        // Search hint is "keyword", so allow contains match on tag name.
-        return tagName.contains(searchName);
-    }
-
-
-    private ArrayList<String> searchTagList(long gid) {
-        GalleryTags tags = EhDB.queryGalleryTags(gid);
-
-        if (tags == null) {
-            return null;
-        }
-
-        ArrayList<String> tagList = new ArrayList<>();
-
-        tagList.addAll(parserList("artist", tags.artist));
-        tagList.addAll(parserList("rows", tags.rows));
-        tagList.addAll(parserList("cosplayer", tags.cosplayer));
-        tagList.addAll(parserList("character", tags.character));
-        tagList.addAll(parserList("female", tags.female));
-        tagList.addAll(parserList("group", tags.group));
-        tagList.addAll(parserList("language", tags.language));
-        tagList.addAll(parserList("male", tags.male));
-        tagList.addAll(parserList("misc", tags.misc));
-        tagList.addAll(parserList("mixed", tags.mixed));
-        tagList.addAll(parserList("other", tags.other));
-        tagList.addAll(parserList("parody", tags.parody));
-        tagList.addAll(parserList("reclass", tags.reclass));
-
-        return tagList;
-    }
-
-    private ArrayList<String> parserList(String name, String content) {
-        if (name == null || content == null) {
-            return new ArrayList<>();
-        }
-        ArrayList<String> list = new ArrayList<>();
-
-        String[] tagNames = content.split(",");
-
-        for (String s : tagNames) {
-            String normalized = s == null ? null : s.trim();
-            if (normalized == null || normalized.isEmpty()) {
-                continue;
-            }
-            list.add(name + ":" + normalized);
-        }
-
-        return list;
     }
 
     /**

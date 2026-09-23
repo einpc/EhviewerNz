@@ -328,6 +328,12 @@
     <string-array name="tag_menu_entries">
         <item>@string/show_definition</item>
         <item>@string/add_filter</item>
+        <item>@string/custom_group_add_tag_dimension</item>
+    </string-array>
+
+    <string-array name="uploader_menu_entries">
+        <item>@string/add_filter</item>
+        <item>@string/custom_group_add_tag_dimension</item>
     </string-array>
 
     <string-array name="app_language_entries">

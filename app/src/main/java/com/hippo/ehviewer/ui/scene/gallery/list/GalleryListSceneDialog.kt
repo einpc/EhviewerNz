@@ -19,6 +19,8 @@ import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.userTag.TagPushParam
 import com.hippo.ehviewer.client.data.userTag.UserTagList
 import com.hippo.ehviewer.dao.Filter
+import com.hippo.ehviewer.download.CustomGroupConfig
+import com.hippo.ehviewer.download.CustomGroupDimension
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.scene.BaseScene
 import com.hippo.ehviewer.ui.scene.EhCallback
@@ -59,6 +61,8 @@ class GalleryListSceneDialog(val baseScene: BaseScene) {
                     )
 
                     1 -> showFilterTagDialog()
+
+                    2 -> addCustomGroupDimension(tagName)
                 }
             }
         if (!Settings.isLogin()) {
@@ -97,6 +101,30 @@ class GalleryListSceneDialog(val baseScene: BaseScene) {
                 EhFilter.getInstance().addFilter(filter)
                 showTip(R.string.filter_added, BaseScene.LENGTH_SHORT)
             }.show()
+    }
+
+    /**
+     * Adds the tag as a custom group dimension, so every gallery carrying it lands in its own group
+     * of the download page. The group name follows the tag translation.
+     */
+    private fun addCustomGroupDimension(tag: String?) {
+        val ctx = context ?: return
+        if (tag.isNullOrEmpty()) {
+            return
+        }
+
+        val config = CustomGroupConfig.load(ctx)
+        if (!config.addDimension(CustomGroupDimension.match(tag, null, true))) {
+            Toast.makeText(ctx, R.string.custom_group_add_dimension_duplicate, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        config.save()
+        Toast.makeText(
+            ctx,
+            ctx.getString(R.string.custom_group_add_tag_dimension_done, tag),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun showTip(@StringRes id: Int, length: Int) {

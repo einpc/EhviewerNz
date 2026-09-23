@@ -1855,6 +1855,16 @@ public class Settings {
         putBoolean(KEY_DOWNLOAD_LABEL_CONTINUOUS_BROWSE, value);
     }
 
+    public static final String KEY_DOWNLOAD_CUSTOM_GROUP_MODE = "download_custom_group_mode";
+
+    public static boolean getDownloadCustomGroupMode() {
+        return getBoolean(KEY_DOWNLOAD_CUSTOM_GROUP_MODE, false);
+    }
+
+    public static void setDownloadCustomGroupMode(boolean value) {
+        putBoolean(KEY_DOWNLOAD_CUSTOM_GROUP_MODE, value);
+    }
+
     public static final String KEY_SHOW_READ_PROGRESS = "show_read_progress";
 
     private static boolean IS_SHOW_READ_PROGRESS = true;
